@@ -1,0 +1,7 @@
+opencv-python>=4.8.0
+numpy>=1.24.0
+pyyaml>=6.0
+spidev>=3.6
+RPi.GPIO>=0.7.1
+hailo_platform  # installed separately via HailoRT
+scipy>=1.11.0

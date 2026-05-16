@@ -1,31 +1,38 @@
 import logging
 import random
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-try:
-    from hailo_platform import (
-        HEF,
-        ConfigureParams,
-        FormatType,
-        HailoSchedulingAlgorithm,
-        HailoStreamInterface,
-        InferVStreams,
-        InputVStreamParams,
-        OutputVStreamParams,
-        VDevice,
-    )
-    HAILO_AVAILABLE = True
-    logger.info("hailo_platform imported successfully")
-except ImportError:
-    HAILO_AVAILABLE = False
-    logger.warning("hailo_platform not available, running in mock mode")
+PERSON_CLASS_ID = 0
 
 
-COCO_PERSON_CLASS_ID = 0
+def _try_import_hailo():
+    try:
+        from hailo_platform import (
+            HEF,
+            VDevice,
+            HailoStreamInterface,
+            InferVStreams,
+            ConfigureParams,
+            InputVStreamParams,
+            OutputVStreamParams,
+            FormatType,
+        )
+        return True, {
+            "HEF": HEF,
+            "VDevice": VDevice,
+            "HailoStreamInterface": HailoStreamInterface,
+            "InferVStreams": InferVStreams,
+            "ConfigureParams": ConfigureParams,
+            "InputVStreamParams": InputVStreamParams,
+            "OutputVStreamParams": OutputVStreamParams,
+            "FormatType": FormatType,
+        }
+    except ImportError:
+        return False, {}
 
 
 class HailoDetector:
@@ -40,133 +47,110 @@ class HailoDetector:
         self._confidence_threshold = confidence_threshold
         self._input_width = input_width
         self._input_height = input_height
-        self._mock_mode = not HAILO_AVAILABLE
+        self._mock_mode = False
+        self._device = None
+        self._network_group = None
+        self._infer_pipeline = None
 
-        self._device: Optional[object] = None
-        self._network_group: Optional[object] = None
-        self._input_vstream_params = None
-        self._output_vstream_params = None
-
-        if not self._mock_mode:
+        hailo_available, self._hailo = _try_import_hailo()
+        if not hailo_available:
+            logger.warning("hailo_platform not available, running in mock mode")
+            self._mock_mode = True
+        else:
             self._initialize_hailo()
 
     def _initialize_hailo(self) -> None:
         try:
-            self._hef = HEF(self._model_path)
-            self._device = VDevice()
-
-            configure_params = ConfigureParams.create_from_hef(
-                self._hef, interface=HailoStreamInterface.PCIe
+            hef = self._hailo["HEF"](self._model_path)
+            self._device = self._hailo["VDevice"]()
+            configure_params = self._hailo["ConfigureParams"].create_from_hef(
+                hef, interface=self._hailo["HailoStreamInterface"].PCIe
             )
-            network_groups = self._device.configure(self._hef, configure_params)
+            network_groups = self._device.configure(hef, configure_params)
             self._network_group = network_groups[0]
+            network_group_params = self._network_group.create_params()
 
-            self._input_vstream_params = InputVStreamParams.make_from_network_group(
-                self._network_group, quantized=False, format_type=FormatType.FLOAT32
+            input_vstreams_params = self._hailo["InputVStreamParams"].make_from_network_group(
+                self._network_group,
+                quantized=False,
+                format_type=self._hailo["FormatType"].FLOAT32,
             )
-            self._output_vstream_params = OutputVStreamParams.make_from_network_group(
-                self._network_group, quantized=False, format_type=FormatType.FLOAT32
+            output_vstreams_params = self._hailo["OutputVStreamParams"].make_from_network_group(
+                self._network_group,
+                quantized=False,
+                format_type=self._hailo["FormatType"].FLOAT32,
             )
-            logger.info("Hailo device initialized with model: %s", self._model_path)
+
+            self._infer_pipeline = self._hailo["InferVStreams"](
+                self._network_group, input_vstreams_params, output_vstreams_params
+            )
+            logger.info("HailoDetector initialized with model: %s", self._model_path)
         except Exception as exc:
-            logger.error("Hailo initialization failed: %s", exc)
+            logger.error("Failed to initialize Hailo device: %s — switching to mock mode", exc)
             self._mock_mode = True
-            logger.warning("Falling back to mock mode")
-
-    def _preprocess(self, frame: np.ndarray) -> np.ndarray:
-        resized = cv2.resize(frame, (self._input_width, self._input_height))
-        normalized = resized.astype(np.float32) / 255.0
-        return np.expand_dims(normalized, axis=0)
-
-    def _postprocess(
-        self, raw_output: np.ndarray, orig_h: int, orig_w: int
-    ) -> List[dict]:
-        detections = []
-        if raw_output.ndim == 3:
-            raw_output = raw_output[0]
-
-        for row in raw_output:
-            if len(row) < 6:
-                continue
-            x_center, y_center, w, h, obj_conf, *class_scores = row
-            class_id = int(np.argmax(class_scores))
-            confidence = float(obj_conf) * float(class_scores[class_id])
-
-            if class_id != COCO_PERSON_CLASS_ID:
-                continue
-            if confidence < self._confidence_threshold:
-                continue
-
-            x1 = int((x_center - w / 2) * orig_w)
-            y1 = int((y_center - h / 2) * orig_h)
-            x2 = int((x_center + w / 2) * orig_w)
-            y2 = int((y_center + h / 2) * orig_h)
-
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(orig_w, x2), min(orig_h, y2)
-
-            cx = (x1 + x2) // 2
-            cy = (y1 + y2) // 2
-
-            detections.append(
-                {
-                    "bbox": (x1, y1, x2, y2),
-                    "confidence": confidence,
-                    "class_id": class_id,
-                    "centroid": (cx, cy),
-                }
-            )
-
-        return detections
-
-    def _mock_detect(self, frame: np.ndarray) -> List[dict]:
-        h, w = frame.shape[:2]
-        detections = []
-        num_persons = random.randint(0, 3)
-        for _ in range(num_persons):
-            x1 = random.randint(0, w - 100)
-            y1 = random.randint(0, h - 150)
-            x2 = x1 + random.randint(40, 100)
-            y2 = y1 + random.randint(80, 150)
-            x2, y2 = min(x2, w), min(y2, h)
-            cx = (x1 + x2) // 2
-            cy = (y1 + y2) // 2
-            detections.append(
-                {
-                    "bbox": (x1, y1, x2, y2),
-                    "confidence": round(random.uniform(0.5, 0.99), 3),
-                    "class_id": COCO_PERSON_CLASS_ID,
-                    "centroid": (cx, cy),
-                }
-            )
-        return detections
 
     def detect(self, frame: np.ndarray) -> List[dict]:
         if self._mock_mode:
             return self._mock_detect(frame)
+        return self._hailo_detect(frame)
 
-        orig_h, orig_w = frame.shape[:2]
-        preprocessed = self._preprocess(frame)
+    def _preprocess(self, frame: np.ndarray) -> np.ndarray:
+        import cv2
+        resized = cv2.resize(frame, (self._input_width, self._input_height))
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        normalized = rgb.astype(np.float32) / 255.0
+        return np.expand_dims(normalized, axis=0)
 
+    def _hailo_detect(self, frame: np.ndarray) -> List[dict]:
+        frame_h, frame_w = frame.shape[:2]
+        input_data = self._preprocess(frame)
+        results = []
         try:
-            with InferVStreams(
-                self._network_group,
-                self._input_vstream_params,
-                self._output_vstream_params,
-            ) as pipeline:
-                input_data = {
-                    pipeline.get_input_vstreams()[0].name: preprocessed
-                }
-                with self._network_group.activate():
-                    raw_results = pipeline.infer(input_data)
-
-            output_name = list(raw_results.keys())[0]
-            raw_output = raw_results[output_name]
-            return self._postprocess(raw_output, orig_h, orig_w)
-
+            with self._network_group.activate():
+                output = self._infer_pipeline.infer({list(self._infer_pipeline.get_input_vstreams())[0].name: input_data})
+            raw_detections = list(output.values())[0][0]
+            for det in raw_detections:
+                if len(det) < 6:
+                    continue
+                y1_n, x1_n, y2_n, x2_n, confidence, class_id = det[:6]
+                if int(class_id) != PERSON_CLASS_ID:
+                    continue
+                if confidence < self._confidence_threshold:
+                    continue
+                x1 = int(x1_n * frame_w)
+                y1 = int(y1_n * frame_h)
+                x2 = int(x2_n * frame_w)
+                y2 = int(y2_n * frame_h)
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
+                results.append({
+                    "bbox": (x1, y1, x2, y2),
+                    "confidence": float(confidence),
+                    "class_id": int(class_id),
+                    "centroid": (cx, cy),
+                })
         except Exception as exc:
-            logger.error("Inference error: %s", exc)
-            return []
+            logger.error("Hailo inference error: %s", exc)
+        return results
+
+    def _mock_detect(self, frame: np.ndarray) -> List[dict]:
+        frame_h, frame_w = frame.shape[:2]
+        detections = []
+        num = random.choices([0, 1, 2], weights=[0.5, 0.35, 0.15])[0]
+        for _ in range(num):
+            x1 = random.randint(0, frame_w - 80)
+            y1 = random.randint(0, frame_h - 160)
+            x2 = x1 + random.randint(40, 80)
+            y2 = y1 + random.randint(80, 160)
+            x2 = min(x2, frame_w - 1)
+            y2 = min(y2, frame_h - 1)
+            detections.append({
+                "bbox": (x1, y1, x2, y2),
+                "confidence": round(random.uniform(self._confidence_threshold, 1.0), 3),
+                "class_id": PERSON_CLASS_ID,
+                "centroid": ((x1 + x2) // 2, (y1 + y2) // 2),
+            })
+        return detections
 
     def close(self) -> None:
         if self._device is not None:
@@ -174,9 +158,4 @@ class HailoDetector:
                 self._device.release()
             except Exception as exc:
                 logger.warning("Error releasing Hailo device: %s", exc)
-
-
-try:
-    import cv2
-except ImportError:
-    pass
+        logger.info("HailoDetector closed")

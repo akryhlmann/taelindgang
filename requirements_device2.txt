@@ -1,0 +1,9 @@
+gspread>=5.12.0
+google-auth>=2.23.0
+plotly>=5.17.0
+dash>=2.14.0
+dash-bootstrap-components>=1.5.0
+pyyaml>=6.0
+spidev>=3.6
+RPi.GPIO>=0.7.1
+pandas>=2.1.0
