@@ -1,0 +1,42 @@
+device:
+  id: "DEV001"
+  location: "main_entrance"
+
+camera:
+  rtsp_url: "rtsp://192.168.1.100:554/stream"
+  fps_target: 10
+  reconnect_interval: 5
+
+ai:
+  model_path: "/home/pi/models/yolov5m_person.hef"
+  confidence_threshold: 0.5
+  input_width: 640
+  input_height: 640
+
+counting:
+  line:
+    point1: [0.2, 0.5]
+    point2: [0.8, 0.5]
+    in_direction: "top"
+  tracker:
+    max_disappeared: 10
+    max_distance: 100
+
+storage:
+  csv_path: "/home/pi/data/counts.csv"
+  db_path: "/home/pi/data/visitor_counts.db"
+
+lora:
+  spi_bus: 0
+  spi_device: 0
+  reset_pin: 22
+  dio0_pin: 18
+  frequency: 868000000
+  tx_power: 14
+  spreading_factor: 7
+  bandwidth: 125000
+  send_interval: 300
+
+logging:
+  level: "INFO"
+  log_file: "/home/pi/logs/device1.log"
