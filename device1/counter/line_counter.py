@@ -68,27 +68,28 @@ class LineCounter:
         return _cross_product_sign(self._p1, self._p2, point)
 
     def _is_in_direction(self, prev_side: float, curr_side: float) -> bool:
-        """Determine if the crossing from prev_side to curr_side corresponds to 'in'."""
+        """Determine if the crossing from prev_side to curr_side corresponds to 'in'.
+
+        Image coordinates have Y increasing downward. For a horizontal line drawn
+        left-to-right (p1.x < p2.x), the cross product (p2-p1) x (pt-p1) is:
+          negative when pt is ABOVE the line (smaller y)
+          positive when pt is BELOW the line (larger y)
+        For a vertical line drawn top-to-bottom, left is negative and right is positive.
+        """
         d = self._in_direction
-        # The line goes from p1 to p2.
-        # Cross product sign conventions:
-        #  positive cross -> point is to the left of directed p1->p2
-        #  negative cross -> point is to the right
-        # "top"    -> moving from top of image to bottom means curr_side becomes negative
-        #             (since for a horizontal line left->right, top is positive cross)
-        # We define which sign change means "in" based on direction label.
         if d == "top":
-            # "in" means entering from the top, i.e. moving downward through the line
-            # downward: y increases, so crossing from positive (above) to negative (below)
-            return prev_side > 0 and curr_side < 0
+            # "in" from top: object was above (negative side) and crossed downward to positive
+            return prev_side < 0 and curr_side > 0
         elif d == "bottom":
-            return prev_side < 0 and curr_side > 0
-        elif d == "left":
-            # "in" means entering from the left, crossing rightward
+            # "in" from bottom: object was below (positive) and crossed upward to negative
             return prev_side > 0 and curr_side < 0
-        elif d == "right":
+        elif d == "left":
+            # "in" from left: object was left (negative) and crossed right to positive
             return prev_side < 0 and curr_side > 0
-        return prev_side > 0 and curr_side < 0
+        elif d == "right":
+            # "in" from right: object was right (positive) and crossed left to negative
+            return prev_side > 0 and curr_side < 0
+        return prev_side < 0 and curr_side > 0
 
     def process_tracks(self, tracks: dict, prev_tracks: dict) -> Tuple[int, int]:
         new_ins = 0
