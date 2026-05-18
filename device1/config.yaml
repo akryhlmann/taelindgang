@@ -27,10 +27,14 @@ storage:
   db_path: "/home/pi/data/visitor_counts.db"
 
 lora:
+  # Waveshare SX1262 LoRaWAN Node Module — BCM pin numbers
   spi_bus: 0
   spi_device: 0
-  reset_pin: 22
-  dio0_pin: 18
+  cs_pin: 21
+  reset_pin: 18
+  busy_pin: 20
+  dio1_pin: 16
+  txen_pin: 6
   frequency: 868000000
   tx_power: 14
   spreading_factor: 7

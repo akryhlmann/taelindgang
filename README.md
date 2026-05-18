@@ -57,20 +57,25 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 | LoRa modul | SX1276 868 MHz (SPI) |
 | Netværk | LAN/WiFi til Google Sheets og dashboard-adgang |
 
-### SX1276 → Raspberry Pi GPIO (BCM)
+### Waveshare SX1262 LoRaWAN Node Module → Raspberry Pi GPIO
 
-| SX1276 | RPi GPIO | Funktion |
-|--------|----------|----------|
-| VCC | 3.3V | Strøm |
-| GND | GND | Stel |
-| SCK | GPIO 11 | SPI Clock |
-| MISO | GPIO 9 | SPI MISO |
-| MOSI | GPIO 10 | SPI MOSI |
-| NSS/CS | GPIO 8 (CE0) | SPI Chip Select |
-| RESET | GPIO 22 | Reset |
-| DIO0 | GPIO 18 | IRQ (TX done / RX done) |
+Modulet er et HAT der stikkes direkte på Raspberry Pi's 40-pin GPIO-stik.
+Aktivér **SPI0** på Raspberry Pi: `sudo raspi-config` → Interface Options → SPI → Enable
 
-Aktivér SPI på Raspberry Pi: `sudo raspi-config` → Interface Options → SPI → Enable
+| SX1262 signal | RPi BCM | Fysisk pin | Funktion |
+|---------------|---------|-----------|----------|
+| MISO | GPIO 9 | Pin 21 | SPI0 Data ind |
+| MOSI | GPIO 10 | Pin 19 | SPI0 Data ud |
+| SCK | GPIO 11 | Pin 23 | SPI0 Clock |
+| NSS/CS | GPIO 21 | Pin 40 | Chip Select (software-styret) |
+| RESET | GPIO 18 | Pin 12 | Reset (100µs lav puls) |
+| BUSY | GPIO 20 | Pin 38 | Optaget-indikator (aktiv høj) |
+| DIO1 | GPIO 16 | Pin 36 | IRQ (TX done / RX done) |
+| TXEN | GPIO 6 | Pin 31 | RF switch TX-enable |
+| 3.3V | 3.3V | Pin 1/17 | Strøm |
+| GND | GND | Pin 6/9/... | Stel |
+
+> **BUSY-pin:** SX1262 kræver at BUSY er LAV før hver SPI-kommando — dette håndteres automatisk af driveren.
 
 ## Projektstruktur
 
