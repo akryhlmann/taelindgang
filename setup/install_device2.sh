@@ -49,7 +49,7 @@ Wants=network.target
 
 [Service]
 Type=simple
-User=pi
+User=${CURRENT_USER}
 WorkingDirectory=${INSTALL_DIR}
 ExecStart=${VENV_PATH}/bin/python -m device2.main
 Restart=on-failure
