@@ -13,7 +13,7 @@ sudo apt-get install -y \
     python3-pip \
     python3-venv \
     git \
-    libatlas-base-dev
+    libopenblas0
 
 echo "--- Creating Python virtual environment at $VENV_PATH ---"
 python3 -m venv "$VENV_PATH"

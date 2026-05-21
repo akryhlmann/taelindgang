@@ -15,8 +15,7 @@ sudo apt-get install -y \
     libopencv-dev \
     python3-opencv \
     git \
-    libatlas-base-dev \
-    libhdf5-dev
+    libopenblas0
 
 echo "--- Creating Python virtual environment at $VENV_PATH ---"
 python3 -m venv "$VENV_PATH"
