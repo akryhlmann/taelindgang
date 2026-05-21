@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VENV_PATH="/home/pi/venv_device1"
-INSTALL_DIR="/home/pi/visitor-counter"
+CURRENT_USER="${SUDO_USER:-$USER}"
+HOME_DIR="$(eval echo ~"$CURRENT_USER")"
+VENV_PATH="${HOME_DIR}/venv_device1"
+INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SERVICE_NAME="visitor-counter-device1"
 
 echo "=== Installing Device 1 (Visitor Counter - AI Edge) ==="
@@ -33,11 +35,11 @@ pip install \
 pip install spidev RPi.GPIO || echo "WARNING: spidev/RPi.GPIO install failed (may need system packages)"
 
 echo "--- Creating required directories ---"
-mkdir -p /home/pi/data
-mkdir -p /home/pi/logs
-mkdir -p /home/pi/models
-mkdir -p /home/pi/config
-chown -R pi:pi /home/pi/data /home/pi/logs /home/pi/models /home/pi/config 2>/dev/null || true
+mkdir -p "${HOME_DIR}/data"
+mkdir -p "${HOME_DIR}/logs"
+mkdir -p "${HOME_DIR}/models"
+mkdir -p "${HOME_DIR}/config"
+chown -R "${CURRENT_USER}:${CURRENT_USER}" "${HOME_DIR}/data" "${HOME_DIR}/logs" "${HOME_DIR}/models" "${HOME_DIR}/config" 2>/dev/null || true
 
 echo "--- Creating systemd service ---"
 sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null << EOF

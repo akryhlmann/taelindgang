@@ -15,11 +15,11 @@ lora:
   bandwidth: 125000
 
 storage:
-  db_path: "/home/pi/data/visitor_counts.db"
-  csv_path: "/home/pi/data/received_counts.csv"
+  db_path: "~/data/visitor_counts.db"
+  csv_path: "~/data/received_counts.csv"
 
 google_sheets:
-  credentials_file: "/home/pi/config/service_account.json"
+  credentials_file: "~/config/service_account.json"
   spreadsheet_id: "YOUR_SPREADSHEET_ID"
   worksheet_name: "Visitor Counts"
   sync_interval: 60
@@ -31,4 +31,4 @@ dashboard:
 
 logging:
   level: "INFO"
-  log_file: "/home/pi/logs/device2.log"
+  log_file: "~/logs/device2.log"

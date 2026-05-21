@@ -35,9 +35,20 @@ def _setup_logging(cfg: dict) -> None:
     )
 
 
+def _expand_paths(obj):
+    """Recursively expand ~ in string values."""
+    if isinstance(obj, str):
+        return os.path.expanduser(obj)
+    if isinstance(obj, dict):
+        return {k: _expand_paths(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_paths(i) for i in obj]
+    return obj
+
+
 def _load_config(path: str) -> dict:
     with open(path, "r") as f:
-        return yaml.safe_load(f)
+        return _expand_paths(yaml.safe_load(f))
 
 
 class Device2:
@@ -131,8 +142,11 @@ class Device2:
         self._receiver = LoRaReceiver(
             spi_bus=lora_cfg["spi_bus"],
             spi_device=lora_cfg["spi_device"],
+            cs_pin=lora_cfg["cs_pin"],
             reset_pin=lora_cfg["reset_pin"],
-            dio0_pin=lora_cfg["dio0_pin"],
+            busy_pin=lora_cfg["busy_pin"],
+            dio1_pin=lora_cfg["dio1_pin"],
+            txen_pin=lora_cfg["txen_pin"],
             frequency=lora_cfg["frequency"],
             spreading_factor=lora_cfg["spreading_factor"],
             bandwidth=lora_cfg["bandwidth"],

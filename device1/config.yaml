@@ -8,7 +8,7 @@ camera:
   reconnect_interval: 5
 
 ai:
-  model_path: "/home/pi/models/yolov5m_person.hef"
+  model_path: "~/models/yolov5m_person.hef"
   confidence_threshold: 0.5
   input_width: 640
   input_height: 640
@@ -23,8 +23,8 @@ counting:
     max_distance: 100
 
 storage:
-  csv_path: "/home/pi/data/counts.csv"
-  db_path: "/home/pi/data/visitor_counts.db"
+  csv_path: "~/data/counts.csv"
+  db_path: "~/data/visitor_counts.db"
 
 lora:
   # Waveshare SX1262 LoRaWAN Node Module — BCM pin numbers
@@ -43,4 +43,4 @@ lora:
 
 logging:
   level: "INFO"
-  log_file: "/home/pi/logs/device1.log"
+  log_file: "~/logs/device1.log"
