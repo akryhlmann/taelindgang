@@ -12,11 +12,11 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 │  Enhed 1: Raspberry Pi          │
 │  + Hailo 8L AI-accelerator      │
 │                                 │
-│  • Person-detektion (YOLOv5)    │
+│  • Person-detektion (YOLOv8s)   │
 │  • Linje-tæller (ind / ud)      │
 │  • Lokal SQLite + CSV           │
 └──────────────┬──────────────────┘
-               │ LoRa 868 MHz (SX1276)
+               │ LoRa 868 MHz (SX1262)
                │ hvert 5. minut
                ▼
 ┌─────────────────────────────────┐
@@ -31,7 +31,7 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 
 ## Funktioner
 
-- **AI-baseret tælling** – YOLOv5 person-detektion via Hailo 8L accelerator
+- **AI-baseret tælling** – YOLOv8s person-detektion via Hailo 8L accelerator
 - **Ind/ud tælling** – konfigurerbar tællelinje med retningsdetektering
 - **Trådløs dataoverførsel** – LoRa 868 MHz, rækkevidde op til ~2 km fri sigt
 - **Offline-drift** – enhed 1 kræver ingen internetforbindelse under event
@@ -48,19 +48,19 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 | Raspberry Pi | 4B eller 5 |
 | AI-accelerator | Hailo 8L (M.2 HAT) |
 | Kamera | IP-kamera med RTSP-stream (Ethernet) |
-| LoRa modul | SX1276 868 MHz (SPI) |
+| LoRa modul | [Waveshare SX1262 LoRaWAN Node Module 868MHz](https://www.waveshare.com/sx1262-lorawan-hat.htm) |
 
 ### Enhed 2
 | Komponent | Specifikation |
 |-----------|--------------|
 | Raspberry Pi | 3B+, 4B eller 5 |
-| LoRa modul | SX1276 868 MHz (SPI) |
+| LoRa modul | [Waveshare SX1262 LoRaWAN Node Module 868MHz](https://www.waveshare.com/sx1262-lorawan-hat.htm) |
 | Netværk | LAN/WiFi til Google Sheets og dashboard-adgang |
 
 ### Waveshare SX1262 LoRaWAN Node Module → Raspberry Pi GPIO
 
 Modulet er et HAT der stikkes direkte på Raspberry Pi's 40-pin GPIO-stik.
-Aktivér **SPI0** på Raspberry Pi: `sudo raspi-config` → Interface Options → SPI → Enable
+Aktivér **SPI0**: `sudo raspi-config` → Interface Options → SPI → Enable
 
 | SX1262 signal | RPi BCM | Fysisk pin | Funktion |
 |---------------|---------|-----------|----------|
@@ -68,14 +68,14 @@ Aktivér **SPI0** på Raspberry Pi: `sudo raspi-config` → Interface Options �
 | MOSI | GPIO 10 | Pin 19 | SPI0 Data ud |
 | SCK | GPIO 11 | Pin 23 | SPI0 Clock |
 | NSS/CS | GPIO 21 | Pin 40 | Chip Select (software-styret) |
-| RESET | GPIO 18 | Pin 12 | Reset (100µs lav puls) |
+| RESET | GPIO 18 | Pin 12 | Reset (>100µs lav puls) |
 | BUSY | GPIO 20 | Pin 38 | Optaget-indikator (aktiv høj) |
 | DIO1 | GPIO 16 | Pin 36 | IRQ (TX done / RX done) |
 | TXEN | GPIO 6 | Pin 31 | RF switch TX-enable |
 | 3.3V | 3.3V | Pin 1/17 | Strøm |
 | GND | GND | Pin 6/9/... | Stel |
 
-> **BUSY-pin:** SX1262 kræver at BUSY er LAV før hver SPI-kommando — dette håndteres automatisk af driveren.
+> **BUSY-pin:** SX1262 kræver at BUSY er LAV inden enhver SPI-kommando. Dette håndteres automatisk af driveren.
 
 ## Projektstruktur
 
@@ -87,16 +87,16 @@ taelindgang/
 │   ├── config.yaml              # Konfiguration (RTSP, tællelinje, LoRa)
 │   ├── main.py                  # Hoved-loop
 │   ├── camera/rtsp_capture.py   # RTSP kamera (baggrundstråd, auto-reconnect)
-│   ├── ai/hailo_detector.py     # Hailo 8L person-detektion
+│   ├── ai/hailo_detector.py     # Hailo 8L person-detektion (YOLOv8)
 │   ├── counter/
 │   │   ├── tracker.py           # Centroid-baseret person-tracker
 │   │   └── line_counter.py      # Linje-krydsnings logik
 │   ├── storage/local_storage.py # SQLite + CSV
-│   └── lora/transmitter.py      # SX1276 SPI driver (TX)
+│   └── lora/transmitter.py      # SX1262 SPI driver (TX)
 ├── device2/                     # Modtager + dashboard
 │   ├── config.yaml
 │   ├── main.py
-│   ├── lora/receiver.py         # SX1276 SPI driver (RX)
+│   ├── lora/receiver.py         # SX1262 SPI driver (RX)
 │   ├── storage/local_storage.py # SQLite med per-enhed historik
 │   ├── sync/google_sheets.py    # Google Sheets via service account
 │   └── dashboard/app.py         # Plotly Dash dashboard
@@ -114,8 +114,9 @@ taelindgang/
 ### Forudsætninger (begge enheder)
 
 ```bash
-git clone https://github.com/akryhlmann/taelindgang.git /home/pi/taelindgang
-cd /home/pi/taelindgang
+# Klon til din hjemmemappe — erstat 'anders' med dit brugernavn
+git clone https://github.com/akryhlmann/taelindgang.git ~/taelindgang
+cd ~/taelindgang
 ```
 
 ---
@@ -128,31 +129,45 @@ cd /home/pi/taelindgang
 bash setup/install_device1.sh
 ```
 
-Scriptet installerer Python-afhængigheder og opretter en systemd-service der starter automatisk ved boot.
+Scriptet registrerer automatisk dit brugernavn og hjemmemappe, installerer Python-afhængigheder og opretter en systemd-service der starter ved boot.
 
-**2. Installer Hailo SDK og model**
+**2. Installer HailoRT SDK**
 
-Download og installer HailoRT SDK fra [hailo.ai/developer-zone](https://hailo.ai/developer-zone/):
+Download HailoRT fra [hailo.ai/developer-zone](https://hailo.ai/developer-zone/) (kræver gratis konto).
+Vælg versionen til **Raspberry Pi / aarch64**.
 
 ```bash
-# Eksempel – brug den version der passer til din RPi OS
-sudo dpkg -i hailort_*.deb
-pip install hailo_platform-*.whl
+# Installer runtime-pakken
+sudo dpkg -i hailort_*_arm64.deb
+
+# Installer Python-bindingen i det oprettede venv
+~/venv_device1/bin/pip install hailort-*.whl
 ```
 
-Download person-detektionsmodellen fra [Hailo Model Zoo](https://github.com/hailo-ai/hailo_model_zoo):
+**3. Download YOLOv8-modellen**
+
+Hent den færdige `.hef`-fil direkte — ingen kompilering nødvendig:
 
 ```bash
-mkdir -p /home/pi/models
-# Placer yolov5m_wo_spp_60p.hef (eller tilsvarende) her:
-cp yolov5m_person.hef /home/pi/models/
+mkdir -p ~/models
+
+# YOLOv8s til Hailo-8L (anbefalet — god balance mellem præcision og hastighed)
+curl -L -o ~/models/yolov8s.hef \
+  "https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.13.0/hailo8l/yolov8s.hef"
 ```
 
-**3. Konfigurer tællelinjen**
+| Model | Præcision (mAP) | Anbefaling |
+|-------|----------------|------------|
+| `yolov8n` | 37.0 | Lavt strømforbrug |
+| `yolov8s` | 44.6 | **Anbefalet til dette projekt** |
+| `yolov8m` | 49.9 | Marginal forbedring, ikke nødvendig |
 
-Kør det visuelle konfigurationsværktøj – det åbner et vindue med kamera-billedet:
+**4. Konfigurer tællelinjen**
+
+Kør det visuelle konfigurationsværktøj — åbner et vindue med kamera-billedet:
 
 ```bash
+source ~/venv_device1/bin/activate
 python tools/configure_line.py --config device1/config.yaml
 ```
 
@@ -166,34 +181,35 @@ python tools/configure_line.py --config device1/config.yaml
 
 Pilen på linjen viser hvilken retning der tæller som "ind".
 
-**4. Rediger config.yaml**
+**5. Rediger config.yaml**
 
 ```bash
 nano device1/config.yaml
 ```
 
+De vigtigste værdier at tilpasse:
+
 ```yaml
 device:
-  id: "DEV001"          # Unikt ID – vigtigt hvis du bruger flere enheder
+  id: "DEV001"          # Unikt ID — vigtigt hvis du bruger flere enheder
 
 camera:
   rtsp_url: "rtsp://192.168.1.100:554/stream"   # Din kameras RTSP-adresse
 
 ai:
-  model_path: "/home/pi/models/yolov5m_person.hef"
+  model_path: "~/models/yolov8s.hef"
   confidence_threshold: 0.5
 
 lora:
-  frequency: 868000000
   send_interval: 300    # Sekunder mellem LoRa-transmissioner (300 = 5 min)
 ```
 
-**5. Start tjenesten**
+**6. Start tjenesten**
 
 ```bash
 sudo systemctl start visitor-counter-device1
 sudo systemctl status visitor-counter-device1
-journalctl -u visitor-counter-device1 -f    # Live log
+sudo journalctl -u visitor-counter-device1 -f    # Live log
 ```
 
 ---
@@ -213,8 +229,8 @@ bash setup/install_device2.sh
 3. Opret en **Service Account** og download JSON-nøglefilen
 4. Placer nøglefilen på enheden:
    ```bash
-   mkdir -p /home/pi/config
-   cp service_account.json /home/pi/config/
+   mkdir -p ~/config
+   cp service_account.json ~/config/
    ```
 5. Opret et Google Sheet og **del det** med service accountens email-adresse (giv redaktøradgang)
 6. Kopiér spreadsheet-ID'et fra URL'en: `https://docs.google.com/spreadsheets/d/`**`DETTE_ER_ID'ET`**`/edit`
@@ -227,10 +243,10 @@ nano device2/config.yaml
 
 ```yaml
 device:
-  event_name: "Mit Event 2025"   # Vises i dashboard-titlen
+  id: "RECEIVER_01"
 
 google_sheets:
-  credentials_file: "/home/pi/config/service_account.json"
+  credentials_file: "~/config/service_account.json"
   spreadsheet_id: "INDSÆT_DIT_SPREADSHEET_ID_HER"
   worksheet_name: "Visitor Counts"
 
@@ -242,6 +258,7 @@ dashboard:
 
 ```bash
 sudo systemctl start visitor-counter-device2
+sudo journalctl -u visitor-counter-device2 -f
 ```
 
 Dashboard er tilgængeligt på: `http://<enhed2-ip>:8050`
@@ -254,7 +271,7 @@ Dashboardet viser i realtid:
 
 - **Nuværende besøgende** – beregnet som (ind − ud)
 - **Ind i dag / Ud i dag** – totaler siden midnat
-- **Graf** – tilstedeværende + indkomne per 15-minutter interval (seneste 24 timer)
+- **Graf** – tilstedeværende + indkomne per 15-minutters interval (seneste 24 timer)
 - **Enhedstabel** – opdeling per tælle-enhed
 
 Opdateres automatisk hvert 30. sekund.
@@ -294,13 +311,23 @@ Pakkeformat (20 bytes total):
 [ Version (1B) | Device ID (8B) | Msg Type (1B) | Count In (2B) | Count Out (2B) | Timestamp (4B) | CRC16 (2B) ]
 ```
 
-- Frekvens: 868 MHz (EU)
-- Spreading Factor: 7
-- Båndbredde: 125 kHz
-- Sync word: 0x12 (privat netværk)
-- Max payload: 200 bytes
+| Parameter | Værdi |
+|-----------|-------|
+| Frekvens | 868 MHz (EU) |
+| Spreading Factor | 7 |
+| Båndbredde | 125 kHz |
+| Sync word | 0x1424 (privat netværk) |
+| Chip | SX1262 |
+| Max payload | 200 bytes |
 
 ## Fejlfinding
+
+**Systemd-service starter ikke (`status=217/USER`)**
+```bash
+# Ret brugernavn i service-filen
+sudo sed -i 's/User=pi/User=DITBRUGERNAVN/' /etc/systemd/system/visitor-counter-device2.service
+sudo systemctl daemon-reload && sudo systemctl restart visitor-counter-device2
+```
 
 **Kamera forbinder ikke**
 ```bash
@@ -313,17 +340,28 @@ ffplay rtsp://192.168.1.100:554/stream
 # Verificér SPI er aktiveret
 ls /dev/spidev*   # Skal vise /dev/spidev0.0
 
-# Tjek GPIO-forbindelser med multimeter
+# Verificér BUSY-pin reagerer (skal gå lav efter reset)
+# Tjek GPIO-forbindelser: CS=21, RESET=18, BUSY=20, DIO1=16, TXEN=6
 ```
 
 **Google Sheets opdateres ikke**
 - Verificér at service accountens email har redaktøradgang til sheetet
-- Tjek at `spreadsheet_id` er korrekt i config.yaml
-- Se log: `journalctl -u visitor-counter-device2 -f`
+- Tjek at `spreadsheet_id` er korrekt i `device2/config.yaml`
+- Se log: `sudo journalctl -u visitor-counter-device2 -f`
 
 **Hailo-modellen kan ikke loades**
-- Verificér at HailoRT-versionen matcher modellens version
-- Prøv med `hailortcli scan` for at se om enheden registreres
+```bash
+# Verificér at Hailo-enheden registreres
+hailortcli scan
+
+# Verificér HailoRT er installeret i venv
+~/venv_device1/bin/python -c "import hailo_platform; print('OK')"
+```
+
+**Hent seneste ændringer fra GitHub**
+```bash
+git pull origin claude/visitor-counter-system-zvhjv
+```
 
 ## Licens
 
