@@ -80,7 +80,6 @@ def main():
         print(f"{FAIL} GPIO setup failed: {e}")
         sys.exit(1)
 
-    GPIO = lgpio  # alias so rest of script uses GPIO.gpio_write etc.
 
     # ------------------------------------------------------------------
     # 3. Open SPI
@@ -96,7 +95,7 @@ def main():
     except Exception as e:
         print(f"{FAIL} SPI open failed: {e}")
         print("       Check: ls /dev/spidev* — SPI should be enabled via raspi-config")
-        GPIO.cleanup()
+        lgpio.gpiochip_close(h)
         sys.exit(1)
 
     def wait_busy(label="", timeout=2.0):
@@ -123,9 +122,9 @@ def main():
     def get_irq():
         if not wait_busy("get_irq"):
             return None
-        GPIO.output(CS_PIN, GPIO.LOW)
+        lgpio.gpio_write(h, CS_PIN, 0)
         r = spi.xfer2([CMD_GET_IRQ, 0x00, 0x00, 0x00])
-        GPIO.output(CS_PIN, GPIO.HIGH)
+        lgpio.gpio_write(h, CS_PIN, 1)
         return (r[2] << 8) | r[3]
 
     # ------------------------------------------------------------------
@@ -145,7 +144,7 @@ def main():
         print("       Possible causes:")
         print("       - RESET pin wiring issue (should be GPIO18)")
         print("       - No 3.3V power to module")
-        GPIO.cleanup()
+        lgpio.gpiochip_close(h)
         sys.exit(1)
     print(f"{PASS} Chip ready after reset")
 
@@ -156,7 +155,7 @@ def main():
     status_resp = cmd([CMD_GET_STATUS, 0x00], "get_status")
     if status_resp is None:
         print(f"{FAIL} No response to GetStatus")
-        GPIO.cleanup()
+        lgpio.gpiochip_close(h)
         sys.exit(1)
 
     status_byte = status_resp[1]
