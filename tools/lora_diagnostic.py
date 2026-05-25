@@ -192,34 +192,56 @@ def main():
     cmd([CMD_SET_STANDBY, 0x00], "SetStandby RC")
     print(f"{INFO} SetStandby(RC) sent")
 
-    # Try TCXO at 3.3V first, then 1.8V, then skip entirely
-    tcxo_ok = False
-    for tcxo_voltage, label in [(0x07, "3.3V"), (0x02, "1.8V"), (None, "disabled")]:
-        cmd([CMD_SET_STANDBY, 0x00])
-        if tcxo_voltage is not None:
-            cmd([CMD_SET_DIO3_TCXO, tcxo_voltage, 0x00, 0x03, 0x20])  # 100ms delay
-            print(f"{INFO} Trying TCXO at {label}...")
-        else:
-            print(f"{INFO} Trying without TCXO (XTAL mode)...")
-        cmd([CMD_CALIBRATE, 0x7F], "Calibrate")
-        time.sleep(0.15)  # give TCXO time to stabilise
+    # --- Strategy A: DIO3-controlled TCXO at each voltage ---
+    tcxo_used = None
 
-        # Check for calibration errors (register 0x0840)
-        err = cmd([0x17, 0x00, 0x00, 0x00], "GetDeviceErrors")
-        if err:
-            err_val = (err[2] << 8) | err[3]
-            if err_val == 0:
-                print(f"{PASS} TCXO {label} — no calibration errors")
-                tcxo_ok = True
-                tcxo_used = label
-                break
-            else:
-                print(f"{WARN} TCXO {label} — calibration errors: 0x{err_val:04X}")
-                cmd([0x07, 0x00, 0x00], "ClearDeviceErrors")
-    if not tcxo_ok:
-        print(f"{WARN} Continuing despite calibration errors")
-        tcxo_used = "unknown"
-    print(f"{INFO} Calibration done (TCXO {tcxo_used})")
+    def hw_reset():
+        lgpio.gpio_write(h, RESET_PIN, 0)
+        time.sleep(0.002)
+        lgpio.gpio_write(h, RESET_PIN, 1)
+        time.sleep(0.020)
+        wait_busy("reset")
+
+    voltages = [(0x07,"3.3V"),(0x06,"3.0V"),(0x05,"2.7V"),(0x04,"2.4V"),
+                (0x03,"2.2V"),(0x02,"1.8V"),(0x01,"1.7V"),(0x00,"1.6V")]
+    for v, label in voltages:
+        hw_reset()
+        cmd([CMD_SET_STANDBY, 0x00])
+        cmd([CMD_SET_DIO3_TCXO, v, 0x00, 0x1F, 0x40])  # ~500ms timeout
+        cmd([CMD_CALIBRATE, 0x7F])
+        time.sleep(0.2)
+        err = cmd([0x17, 0x00, 0x00, 0x00])
+        err_val = ((err[2] << 8) | err[3]) if err else 0xFFFF
+        cmd([0x07, 0x00, 0x00])  # ClearDeviceErrors
+        if err_val == 0:
+            print(f"{PASS} Strategy A: TCXO via DIO3 at {label} — no errors")
+            tcxo_used = f"DIO3 {label}"
+            break
+        else:
+            print(f"{WARN} DIO3 {label}: errors 0x{err_val:04X}")
+
+    # --- Strategy B: always-on TCXO, skip XOSC calibration ---
+    if tcxo_used is None:
+        print(f"{INFO} Trying Strategy B: always-on TCXO (skip XOSC calib)...")
+        hw_reset()
+        cmd([CMD_SET_STANDBY, 0x00])
+        # Calibrate everything EXCEPT XOSC startup (bit 5): mask = 0x1F
+        cmd([CMD_CALIBRATE, 0x1F])
+        time.sleep(0.1)
+        err = cmd([0x17, 0x00, 0x00, 0x00])
+        err_val = ((err[2] << 8) | err[3]) if err else 0xFFFF
+        cmd([0x07, 0x00, 0x00])
+        if err_val == 0:
+            print(f"{PASS} Strategy B: calibration OK without XOSC")
+            tcxo_used = "always-on (no DIO3 ctrl)"
+        else:
+            print(f"{WARN} Strategy B errors: 0x{err_val:04X}")
+
+    if tcxo_used is None:
+        print(f"{WARN} All strategies failed — continuing anyway")
+        tcxo_used = "none"
+
+    print(f"{INFO} Calibration done — using: {tcxo_used}")
 
     cmd([CMD_SET_REGULATOR_MODE, 0x01], "SetRegulatorMode DC-DC")
     cmd([CMD_SET_PACKET_TYPE, 0x01], "SetPacketType LoRa")
@@ -308,7 +330,7 @@ def main():
         err_val2 = (err2[2] << 8) | err2[3]
         if err_val2:
             print(f"{WARN} Device errors after TX: 0x{err_val2:04X}")
-            if err_val2 & 0x0020: print("       - PLL lock failed")
+            if err_val2 & 0x0020: print("       - XoscStart failed (XOSC did not start)")
             if err_val2 & 0x0010: print("       - PLL calibration failed")
             if err_val2 & 0x0001: print("       - RC64k calibration failed")
             if err_val2 & 0x0002: print("       - RC13M calibration failed")
