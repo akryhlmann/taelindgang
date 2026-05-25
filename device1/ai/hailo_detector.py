@@ -159,3 +159,34 @@ class HailoDetector:
             except Exception as exc:
                 logger.warning("Error releasing Hailo device: %s", exc)
         logger.info("HailoDetector closed")
+
+
+class MockDetector:
+    """Detects the orange blobs rendered by MockCamera via HSV color thresholding.
+    Used in debug mode so the tracker and line counter see realistic, consistent
+    detections tied to the actual blob positions in the frame."""
+
+    def detect(self, frame: np.ndarray) -> List[dict]:
+        import cv2
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        # BGR (0, 120, 255) is orange: HSV hue ~15°, broad saturation/value range
+        mask = cv2.inRange(hsv,
+                           np.array([5,  80,  80]),
+                           np.array([25, 255, 255]))
+        mask = cv2.dilate(mask, None, iterations=2)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        detections = []
+        for cnt in contours:
+            if cv2.contourArea(cnt) < 200:
+                continue
+            x, y, w, h = cv2.boundingRect(cnt)
+            detections.append({
+                "bbox": (x, y, x + w, y + h),
+                "confidence": 0.99,
+                "class_id": PERSON_CLASS_ID,
+                "centroid": (x + w // 2, y + h // 2),
+            })
+        return detections
+
+    def close(self) -> None:
+        pass

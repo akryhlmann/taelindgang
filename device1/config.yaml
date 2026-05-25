@@ -41,6 +41,10 @@ lora:
   bandwidth: 125000
   send_interval: 300
 
+debug:
+  mock_camera: true        # set to false to use real RTSP camera + Hailo
+  person_interval: 15.0   # seconds between simulated persons crossing the line
+
 logging:
   level: "INFO"
   log_file: "~/logs/device1.log"

@@ -13,8 +13,8 @@ _BASE = Path(__file__).parent
 sys.path.insert(0, str(_BASE.parent))
 
 from shared.protocol import MessageType, encode_message
-from device1.camera.rtsp_capture import RTSPCapture
-from device1.ai.hailo_detector import HailoDetector
+from device1.camera.rtsp_capture import RTSPCapture, MockCamera
+from device1.ai.hailo_detector import HailoDetector, MockDetector
 from device1.counter.tracker import CentroidTracker
 from device1.counter.line_counter import LineCounter
 from device1.storage.local_storage import LocalStorage
@@ -68,20 +68,30 @@ class Device1:
 
     def _init_components(self) -> None:
         cfg = self._cfg
-        cam_cfg = cfg["camera"]
-        self._camera = RTSPCapture(
-            rtsp_url=cam_cfg["rtsp_url"],
-            fps_target=cam_cfg["fps_target"],
-            reconnect_interval=cam_cfg["reconnect_interval"],
-        )
+        debug_cfg = cfg.get("debug", {})
+        mock_camera = debug_cfg.get("mock_camera", False)
 
-        ai_cfg = cfg["ai"]
-        self._detector = HailoDetector(
-            model_path=ai_cfg["model_path"],
-            confidence_threshold=ai_cfg["confidence_threshold"],
-            input_width=ai_cfg["input_width"],
-            input_height=ai_cfg["input_height"],
-        )
+        if mock_camera:
+            self._logger.warning("DEBUG MODE: using MockCamera and MockDetector (no RTSP/Hailo)")
+            self._camera = MockCamera(
+                fps_target=cfg["camera"].get("fps_target", 10),
+                person_interval=debug_cfg.get("person_interval", 15.0),
+            )
+            self._detector = MockDetector()
+        else:
+            cam_cfg = cfg["camera"]
+            self._camera = RTSPCapture(
+                rtsp_url=cam_cfg["rtsp_url"],
+                fps_target=cam_cfg["fps_target"],
+                reconnect_interval=cam_cfg["reconnect_interval"],
+            )
+            ai_cfg = cfg["ai"]
+            self._detector = HailoDetector(
+                model_path=ai_cfg["model_path"],
+                confidence_threshold=ai_cfg["confidence_threshold"],
+                input_width=ai_cfg["input_width"],
+                input_height=ai_cfg["input_height"],
+            )
 
         tracker_cfg = cfg["counting"]["tracker"]
         self._tracker = CentroidTracker(

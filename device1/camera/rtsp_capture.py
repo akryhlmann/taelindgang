@@ -78,3 +78,91 @@ class RTSPCapture:
             sleep_time = frame_interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
+
+class MockCamera:
+    """Synthetic camera for debug mode. Generates frames with simulated person blobs
+    that cross the counting line, allowing the full pipeline to be tested without
+    a real RTSP stream or Hailo hardware."""
+
+    WIDTH  = 640
+    HEIGHT = 480
+
+    def __init__(self, fps_target: int = 10, person_interval: float = 15.0):
+        self._fps_target = fps_target
+        self._person_interval = person_interval  # seconds between new simulated persons
+        self._frame: Optional[np.ndarray] = None
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._persons: list = []
+        self._next_person_id = 0
+        self._next_person_time = 0.0
+
+    def start(self) -> None:
+        self._running = True
+        self._next_person_time = time.time() + 2.0
+        self._thread = threading.Thread(target=self._generate_loop, daemon=True)
+        self._thread.start()
+        logger.info("MockCamera started (%dx%d, person every %.0fs)",
+                    self.WIDTH, self.HEIGHT, self._person_interval)
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+    def is_connected(self) -> bool:
+        return self._running
+
+    def get_frame(self) -> Optional[np.ndarray]:
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+    def _generate_loop(self) -> None:
+        interval = 1.0 / self._fps_target
+        while self._running:
+            t0 = time.monotonic()
+            now = time.time()
+
+            # Spawn a new simulated person periodically; alternates in/out direction
+            if now >= self._next_person_time:
+                pid = self._next_person_id
+                self._next_person_id += 1
+                # Even IDs move top→bottom (counted as "in"), odd IDs bottom→top ("out")
+                x = int(self.WIDTH * (0.2 + 0.6 * (pid % 5) / 4))
+                if pid % 2 == 0:
+                    self._persons.append({"id": pid, "x": x, "y": 20, "vx": 0, "vy": 4})
+                else:
+                    self._persons.append({"id": pid, "x": x, "y": self.HEIGHT - 20, "vx": 0, "vy": -4})
+                self._next_person_time = now + self._person_interval
+                logger.debug("MockCamera: spawned person %d", pid)
+
+            # Move persons and remove those that left the frame
+            active = []
+            for p in self._persons:
+                p["x"] += p["vx"]
+                p["y"] += p["vy"]
+                if 0 <= p["y"] <= self.HEIGHT:
+                    active.append(p)
+            self._persons = active
+
+            # Render frame
+            frame = np.zeros((self.HEIGHT, self.WIDTH, 3), dtype=np.uint8)
+            frame[:] = (30, 30, 30)
+            line_y = self.HEIGHT // 2
+            cv2.line(frame, (0, line_y), (self.WIDTH, line_y), (0, 200, 0), 2)
+            cv2.putText(frame, "DEBUG MODE - MockCamera", (10, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 200), 1)
+            for p in self._persons:
+                cx, cy = int(p["x"]), int(p["y"])
+                cv2.ellipse(frame, (cx, cy), (18, 30), 0, 0, 360, (0, 120, 255), -1)
+                cv2.circle(frame, (cx, cy - 38), 12, (0, 120, 255), -1)
+
+            with self._lock:
+                self._frame = frame
+
+            elapsed = time.monotonic() - t0
+            sleep = interval - elapsed
+            if sleep > 0:
+                time.sleep(sleep)
