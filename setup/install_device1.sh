@@ -32,7 +32,7 @@ pip install \
     "scipy>=1.11.0"
 
 # spidev and RPi.GPIO are hardware-specific
-pip install spidev RPi.GPIO || echo "WARNING: spidev/RPi.GPIO install failed (may need system packages)"
+pip install spidev lgpio || echo "WARNING: spidev/lgpio install failed (may need system packages)"
 
 echo "--- Creating required directories ---"
 mkdir -p "${HOME_DIR}/data"

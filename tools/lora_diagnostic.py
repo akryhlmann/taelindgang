@@ -54,33 +54,33 @@ def main():
     # ------------------------------------------------------------------
     # 1. Import hardware libraries
     # ------------------------------------------------------------------
-    print(f"{INFO} Importing spidev and RPi.GPIO...")
+    print(f"{INFO} Importing spidev and lgpio...")
     try:
         import spidev
-        import RPi.GPIO as GPIO
+        import lgpio
         print(f"{PASS} Libraries imported")
     except ImportError as e:
         print(f"{FAIL} {e}")
-        print("       Run: pip install spidev RPi.GPIO")
+        print("       Run: pip install spidev lgpio")
         sys.exit(1)
 
     # ------------------------------------------------------------------
     # 2. Setup GPIO
     # ------------------------------------------------------------------
-    print(f"\n{INFO} Setting up GPIO (BCM mode)...")
+    print(f"\n{INFO} Setting up GPIO via lgpio...")
     try:
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-        GPIO.setup(CS_PIN,    GPIO.OUT, initial=GPIO.HIGH)
-        GPIO.setup(RESET_PIN, GPIO.OUT, initial=GPIO.HIGH)
-        GPIO.setup(BUSY_PIN,  GPIO.IN)
-        GPIO.setup(DIO1_PIN,  GPIO.IN)
-        GPIO.setup(TXEN_PIN,  GPIO.OUT, initial=GPIO.LOW)
+        h = lgpio.gpiochip_open(0)
+        lgpio.gpio_claim_output(h, CS_PIN,    1)
+        lgpio.gpio_claim_output(h, RESET_PIN, 1)
+        lgpio.gpio_claim_input(h,  BUSY_PIN)
+        lgpio.gpio_claim_input(h,  DIO1_PIN)
+        lgpio.gpio_claim_output(h, TXEN_PIN,  0)
         print(f"{PASS} GPIO configured: CS={CS_PIN} RST={RESET_PIN} BUSY={BUSY_PIN} DIO1={DIO1_PIN} TXEN={TXEN_PIN}")
     except Exception as e:
         print(f"{FAIL} GPIO setup failed: {e}")
-        GPIO.cleanup()
         sys.exit(1)
+
+    GPIO = lgpio  # alias so rest of script uses GPIO.gpio_write etc.
 
     # ------------------------------------------------------------------
     # 3. Open SPI
@@ -101,7 +101,7 @@ def main():
 
     def wait_busy(label="", timeout=2.0):
         deadline = time.time() + timeout
-        while GPIO.input(BUSY_PIN) == GPIO.HIGH:
+        while lgpio.gpio_read(h, BUSY_PIN) == 1:
             if time.time() > deadline:
                 print(f"{FAIL} BUSY timeout ({label}) — SX1262 is stuck busy")
                 print("       Check wiring: BUSY=GPIO20, RESET=GPIO18")
@@ -112,9 +112,9 @@ def main():
     def cmd(data, label=""):
         if not wait_busy(label):
             return None
-        GPIO.output(CS_PIN, GPIO.LOW)
+        lgpio.gpio_write(h, CS_PIN, 0)
         result = spi.xfer2(data)
-        GPIO.output(CS_PIN, GPIO.HIGH)
+        lgpio.gpio_write(h, CS_PIN, 1)
         return result
 
     def write_reg(addr, value):
@@ -132,12 +132,12 @@ def main():
     # 4. Hardware reset
     # ------------------------------------------------------------------
     print(f"\n{INFO} Hardware reset...")
-    GPIO.output(RESET_PIN, GPIO.LOW)
+    lgpio.gpio_write(h, RESET_PIN, 0)
     time.sleep(0.002)
-    GPIO.output(RESET_PIN, GPIO.HIGH)
+    lgpio.gpio_write(h, RESET_PIN, 1)
     time.sleep(0.020)
 
-    busy_after_reset = GPIO.input(BUSY_PIN)
+    busy_after_reset = lgpio.gpio_read(h, BUSY_PIN)
     print(f"{INFO} BUSY after reset: {'HIGH (chip starting up)' if busy_after_reset else 'LOW (ready)'}")
 
     if not wait_busy("post-reset", timeout=3.0):
@@ -238,7 +238,7 @@ def main():
     cmd([CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, len(payload), 0x01, 0x00], "SetPacketParams")
     cmd([CMD_CLEAR_IRQ, 0xFF, 0xFF], "ClearIrq pre-TX")
 
-    GPIO.output(TXEN_PIN, GPIO.HIGH)
+    lgpio.gpio_write(h, TXEN_PIN, 1)
     cmd([CMD_SET_TX, 0x00, 0x00, 0x00], "SetTx")
     print(f"{INFO} SetTx sent — watching for TX_DONE (max 5s)...")
 
@@ -256,7 +256,7 @@ def main():
             break
         time.sleep(0.01)
 
-    GPIO.output(TXEN_PIN, GPIO.LOW)
+    lgpio.gpio_write(h, TXEN_PIN, 0)
     cmd([CMD_CLEAR_IRQ, 0xFF, 0xFF], "ClearIrq post-TX")
 
     if tx_ok:
@@ -280,7 +280,7 @@ def main():
     print()
 
     spi.close()
-    GPIO.cleanup()
+    lgpio.gpiochip_close(h)
 
 
 if __name__ == "__main__":

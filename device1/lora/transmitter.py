@@ -5,36 +5,30 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # SX1262 opcodes
-_CMD_SET_STANDBY = 0x80
-_CMD_SET_TX = 0x83
-_CMD_SET_RX = 0x82
-_CMD_SET_PA_CONFIG = 0x95
-_CMD_SET_REGULATOR_MODE = 0x96
-_CMD_SET_DIO3_AS_TCXO_CTRL = 0x97
-_CMD_SET_DIO2_AS_RF_SWITCH = 0x9D
-_CMD_CALIBRATE = 0x89
-_CMD_CALIBRATE_IMAGE = 0x98
-_CMD_SET_PACKET_TYPE = 0x01
-_CMD_SET_RF_FREQUENCY = 0x86
-_CMD_SET_TX_PARAMS = 0x8E
-_CMD_SET_BUFFER_BASE_ADDR = 0x8F
-_CMD_SET_MODULATION_PARAMS = 0x8B
-_CMD_SET_PACKET_PARAMS = 0x8C
-_CMD_SET_DIO_IRQ_PARAMS = 0x08
-_CMD_GET_IRQ_STATUS = 0x12
-_CMD_CLEAR_IRQ_STATUS = 0x02
-_CMD_WRITE_BUFFER = 0x0E
-_CMD_WRITE_REGISTER = 0x0D
+_CMD_SET_STANDBY         = 0x80
+_CMD_SET_TX              = 0x83
+_CMD_SET_PA_CONFIG       = 0x95
+_CMD_SET_REGULATOR_MODE  = 0x96
+_CMD_SET_DIO3_AS_TCXO   = 0x97
+_CMD_CALIBRATE           = 0x89
+_CMD_SET_PACKET_TYPE     = 0x01
+_CMD_SET_RF_FREQUENCY    = 0x86
+_CMD_SET_TX_PARAMS       = 0x8E
+_CMD_SET_BUFFER_BASE     = 0x8F
+_CMD_SET_MOD_PARAMS      = 0x8B
+_CMD_SET_PKT_PARAMS      = 0x8C
+_CMD_SET_DIO_IRQ         = 0x08
+_CMD_GET_IRQ             = 0x12
+_CMD_CLEAR_IRQ           = 0x02
+_CMD_WRITE_BUFFER        = 0x0E
+_CMD_WRITE_REGISTER      = 0x0D
 
-# SX1262 registers
-_REG_LORA_SYNC_WORD_MSB = 0x0740
-_REG_LORA_SYNC_WORD_LSB = 0x0741
+_REG_SYNC_WORD_MSB = 0x0740
+_REG_SYNC_WORD_LSB = 0x0741
 
-# IRQ masks
 _IRQ_TX_DONE = 0x0001
 _IRQ_TIMEOUT = 0x0200
 
-# LoRa bandwidth index
 _BW_MAP = {
     7_800: 0x00, 10_400: 0x08, 15_600: 0x01, 20_800: 0x09,
     31_250: 0x02, 41_700: 0x0A, 62_500: 0x03, 125_000: 0x04,
@@ -45,8 +39,8 @@ _BW_MAP = {
 def _try_import_hw():
     try:
         import spidev
-        import RPi.GPIO as GPIO
-        return True, spidev, GPIO
+        import lgpio
+        return True, spidev, lgpio
     except (ImportError, RuntimeError):
         return False, None, None
 
@@ -78,82 +72,69 @@ class LoRaTransmitter:
         self._sf = spreading_factor
         self._bw = bandwidth
         self._spi = None
-        self._GPIO = None
+        self._gpio_handle: Optional[int] = None
         self._mock_mode = False
 
-        hw_ok, spidev_mod, gpio_mod = _try_import_hw()
+        hw_ok, spidev_mod, lgpio_mod = _try_import_hw()
         if not hw_ok:
-            logger.warning("SPI/GPIO not available — LoRaTransmitter running in mock mode")
+            logger.warning("spidev/lgpio not available — LoRaTransmitter running in mock mode")
             self._mock_mode = True
         else:
             self._spidev = spidev_mod
-            self._GPIO = gpio_mod
+            self._lgpio = lgpio_mod
 
     def initialize(self) -> bool:
         if self._mock_mode:
             logger.info("LoRaTransmitter mock initialization OK")
             return True
         try:
-            GPIO = self._GPIO
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setup(self._cs_pin, GPIO.OUT, initial=GPIO.HIGH)
-            GPIO.setup(self._reset_pin, GPIO.OUT, initial=GPIO.HIGH)
-            GPIO.setup(self._busy_pin, GPIO.IN)
-            GPIO.setup(self._dio1_pin, GPIO.IN)
-            GPIO.setup(self._txen_pin, GPIO.OUT, initial=GPIO.LOW)
+            lg = self._lgpio
+            self._gpio_handle = lg.gpiochip_open(0)
+            h = self._gpio_handle
+
+            lg.gpio_claim_output(h, self._cs_pin,    1)  # CS idle high
+            lg.gpio_claim_output(h, self._reset_pin, 1)
+            lg.gpio_claim_input(h,  self._busy_pin)
+            lg.gpio_claim_input(h,  self._dio1_pin)
+            lg.gpio_claim_output(h, self._txen_pin,  0)  # TXEN idle low
 
             self._spi = self._spidev.SpiDev()
             self._spi.open(self._spi_bus, self._spi_device)
             self._spi.max_speed_hz = 8_000_000
             self._spi.mode = 0
-            self._spi.no_cs = True  # CS controlled manually via cs_pin
+            self._spi.no_cs = True
 
             self._reset()
-            self._cmd([_CMD_SET_STANDBY, 0x00])  # STDBY_RC
+            self._cmd([_CMD_SET_STANDBY, 0x00])
 
-            # TCXO on DIO3 at 1.8V, 5ms startup delay
-            self._cmd([_CMD_SET_DIO3_AS_TCXO_CTRL, 0x07, 0x00, 0x01, 0x40])
-            # Calibrate all blocks after TCXO is stable
+            # TCXO on DIO3 at 3.3V, 5ms startup delay
+            self._cmd([_CMD_SET_DIO3_AS_TCXO, 0x07, 0x00, 0x01, 0x40])
             self._cmd([_CMD_CALIBRATE, 0x7F])
-            time.sleep(0.01)
+            time.sleep(0.05)
 
-            self._cmd([_CMD_SET_REGULATOR_MODE, 0x01])  # DC-DC
-            self._cmd([_CMD_SET_PACKET_TYPE, 0x01])  # LoRa
+            self._cmd([_CMD_SET_REGULATOR_MODE, 0x01])
+            self._cmd([_CMD_SET_PACKET_TYPE, 0x01])
 
             freq_raw = int(self._frequency / 32e6 * (1 << 25))
             self._cmd([
                 _CMD_SET_RF_FREQUENCY,
-                (freq_raw >> 24) & 0xFF,
-                (freq_raw >> 16) & 0xFF,
-                (freq_raw >> 8) & 0xFF,
-                freq_raw & 0xFF,
+                (freq_raw >> 24) & 0xFF, (freq_raw >> 16) & 0xFF,
+                (freq_raw >> 8) & 0xFF,  freq_raw & 0xFF,
             ])
 
-            # PA config for SX1262 with PA_BOOST (up to +22 dBm)
             self._cmd([_CMD_SET_PA_CONFIG, 0x04, 0x07, 0x00, 0x01])
-            clamped_power = max(-9, min(22, self._tx_power))
-            self._cmd([_CMD_SET_TX_PARAMS, clamped_power & 0xFF, 0x04])  # ramp 200µs
-
-            self._cmd([_CMD_SET_BUFFER_BASE_ADDR, 0x00, 0x00])
+            self._cmd([_CMD_SET_TX_PARAMS, max(-9, min(22, self._tx_power)) & 0xFF, 0x04])
+            self._cmd([_CMD_SET_BUFFER_BASE, 0x00, 0x00])
 
             bw_idx = _BW_MAP.get(self._bw, 0x04)
-            self._cmd([_CMD_SET_MODULATION_PARAMS, self._sf, bw_idx, 0x01, 0x00])
+            self._cmd([_CMD_SET_MOD_PARAMS, self._sf, bw_idx, 0x01, 0x00])
+            self._cmd([_CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, 0xFF, 0x01, 0x00])
 
-            # Packet params: preamble=12, explicit header, max255, CRC on, IQ normal
-            self._cmd([_CMD_SET_PACKET_PARAMS, 0x00, 0x0C, 0x00, 0xFF, 0x01, 0x00])
+            self._write_register(_REG_SYNC_WORD_MSB, 0x14)
+            self._write_register(_REG_SYNC_WORD_LSB, 0x24)
 
-            # Private network sync word (0x1424)
-            self._write_register(_REG_LORA_SYNC_WORD_MSB, 0x14)
-            self._write_register(_REG_LORA_SYNC_WORD_LSB, 0x24)
-
-            # IRQ: TX_DONE and TIMEOUT on DIO1
-            self._cmd([
-                _CMD_SET_DIO_IRQ_PARAMS,
-                0x02, 0x01,  # IRQ mask (TX_DONE | TIMEOUT)
-                0x02, 0x01,  # DIO1 mask
-                0x00, 0x00,  # DIO2 mask
-                0x00, 0x00,  # DIO3 mask
-            ])
+            self._cmd([_CMD_SET_DIO_IRQ,
+                       0x02, 0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00])
 
             logger.info("LoRaTransmitter (SX1262) initialized at %dMHz SF%d BW%dkHz",
                         self._frequency // 1_000_000, self._sf, self._bw // 1_000)
@@ -167,88 +148,88 @@ class LoRaTransmitter:
             logger.info("LoRa mock TX: %d bytes", len(data))
             return True
         try:
+            lg = self._lgpio
+            h = self._gpio_handle
+
             self._cmd([_CMD_SET_STANDBY, 0x00])
-            self._cmd([_CMD_CLEAR_IRQ_STATUS, 0xFF, 0xFF])
+            self._cmd([_CMD_CLEAR_IRQ, 0xFF, 0xFF])
 
             payload = list(data)
             self._cmd([_CMD_WRITE_BUFFER, 0x00] + payload)
+            self._cmd([_CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, len(payload), 0x01, 0x00])
 
-            # Update payload length in packet params
-            self._cmd([_CMD_SET_PACKET_PARAMS, 0x00, 0x0C, 0x00, len(payload), 0x01, 0x00])
+            lg.gpio_write(h, self._txen_pin, 1)
+            self._cmd([_CMD_SET_TX, 0x00, 0x00, 0x00])
 
-            self._GPIO.output(self._txen_pin, self._GPIO.HIGH)
-            self._cmd([_CMD_SET_TX, 0x00, 0x00, 0x00])  # no timeout
-
-            timeout = time.time() + 5.0
-            while time.time() < timeout:
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
                 irq = self._get_irq()
                 if irq & _IRQ_TX_DONE:
-                    self._cmd([_CMD_CLEAR_IRQ_STATUS, 0xFF, 0xFF])
-                    self._GPIO.output(self._txen_pin, self._GPIO.LOW)
+                    self._cmd([_CMD_CLEAR_IRQ, 0xFF, 0xFF])
+                    lg.gpio_write(h, self._txen_pin, 0)
                     logger.debug("LoRa TX done, %d bytes", len(data))
                     return True
                 if irq & _IRQ_TIMEOUT:
-                    logger.warning("LoRa TX timeout (IRQ)")
+                    logger.warning("LoRa TX timeout IRQ")
                     break
                 time.sleep(0.005)
 
-            self._GPIO.output(self._txen_pin, self._GPIO.LOW)
-            logger.warning("LoRa TX did not complete in time")
+            lg.gpio_write(h, self._txen_pin, 0)
+            logger.warning("LoRa TX did not complete")
             return False
         except Exception as exc:
             logger.error("LoRa send error: %s", exc)
-            if self._GPIO:
-                self._GPIO.output(self._txen_pin, self._GPIO.LOW)
+            if self._gpio_handle is not None:
+                self._lgpio.gpio_write(self._gpio_handle, self._txen_pin, 0)
             return False
 
     def close(self) -> None:
         if self._mock_mode:
             return
         try:
-            self._cmd([_CMD_SET_STANDBY, 0x00])
             if self._spi:
+                self._cmd([_CMD_SET_STANDBY, 0x00])
                 self._spi.close()
-            if self._GPIO:
-                self._GPIO.cleanup()
+            if self._gpio_handle is not None:
+                self._lgpio.gpiochip_close(self._gpio_handle)
         except Exception as exc:
             logger.warning("LoRa close error: %s", exc)
 
     # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _reset(self) -> None:
-        self._GPIO.output(self._reset_pin, self._GPIO.LOW)
-        time.sleep(0.001)  # >100µs
-        self._GPIO.output(self._reset_pin, self._GPIO.HIGH)
-        time.sleep(0.01)
+        lg = self._lgpio
+        h = self._gpio_handle
+        lg.gpio_write(h, self._reset_pin, 0)
+        time.sleep(0.001)
+        lg.gpio_write(h, self._reset_pin, 1)
+        time.sleep(0.02)
         self._wait_busy()
 
     def _wait_busy(self, timeout: float = 1.0) -> None:
         deadline = time.time() + timeout
-        while self._GPIO.input(self._busy_pin) == self._GPIO.HIGH:
+        while self._lgpio.gpio_read(self._gpio_handle, self._busy_pin) == 1:
             if time.time() > deadline:
                 raise TimeoutError("SX1262 BUSY timeout")
             time.sleep(0.0001)
 
     def _cmd(self, data: list) -> list:
         self._wait_busy()
-        self._GPIO.output(self._cs_pin, self._GPIO.LOW)
+        lg = self._lgpio
+        h = self._gpio_handle
+        lg.gpio_write(h, self._cs_pin, 0)
         result = self._spi.xfer2(data)
-        self._GPIO.output(self._cs_pin, self._GPIO.HIGH)
+        lg.gpio_write(h, self._cs_pin, 1)
         return result
 
     def _write_register(self, address: int, value: int) -> None:
-        self._cmd([
-            _CMD_WRITE_REGISTER,
-            (address >> 8) & 0xFF,
-            address & 0xFF,
-            value,
-        ])
+        self._cmd([_CMD_WRITE_REGISTER, (address >> 8) & 0xFF, address & 0xFF, value])
 
     def _get_irq(self) -> int:
         self._wait_busy()
-        self._GPIO.output(self._cs_pin, self._GPIO.LOW)
-        result = self._spi.xfer2([_CMD_GET_IRQ_STATUS, 0x00, 0x00, 0x00])
-        self._GPIO.output(self._cs_pin, self._GPIO.HIGH)
+        lg = self._lgpio
+        h = self._gpio_handle
+        lg.gpio_write(h, self._cs_pin, 0)
+        result = self._spi.xfer2([_CMD_GET_IRQ, 0x00, 0x00, 0x00])
+        lg.gpio_write(h, self._cs_pin, 1)
         return (result[2] << 8) | result[3]
