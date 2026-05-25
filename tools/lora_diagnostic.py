@@ -85,16 +85,21 @@ def main():
     # 3. Open SPI
     # ------------------------------------------------------------------
     print(f"\n{INFO} Opening SPI bus {SPI_BUS}.{SPI_DEV}...")
-    try:
-        spi = spidev.SpiDev()
-        spi.open(SPI_BUS, SPI_DEV)
-        spi.max_speed_hz = 1_000_000  # slow speed for diagnostics
-        spi.mode = 0
-        spi.no_cs = True
-        print(f"{PASS} SPI opened (/dev/spidev{SPI_BUS}.{SPI_DEV})")
-    except Exception as e:
-        print(f"{FAIL} SPI open failed: {e}")
-        print("       Check: ls /dev/spidev* — SPI should be enabled via raspi-config")
+    spi = None
+    for bus, dev in [(0, 0), (0, 1), (10, 0)]:
+        try:
+            spi = spidev.SpiDev()
+            spi.open(bus, dev)
+            spi.max_speed_hz = 1_000_000
+            spi.mode = 0
+            print(f"{PASS} SPI opened (/dev/spidev{bus}.{dev})")
+            SPI_BUS, SPI_DEV = bus, dev
+            break
+        except Exception as e:
+            print(f"{WARN} /dev/spidev{bus}.{dev} failed: {e}")
+            spi = None
+    if spi is None:
+        print(f"{FAIL} Could not open any SPI device")
         lgpio.gpiochip_close(h)
         sys.exit(1)
 

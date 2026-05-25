@@ -102,7 +102,6 @@ class LoRaTransmitter:
             self._spi.open(self._spi_bus, self._spi_device)
             self._spi.max_speed_hz = 8_000_000
             self._spi.mode = 0
-            self._spi.no_cs = True
 
             self._reset()
             self._cmd([_CMD_SET_STANDBY, 0x00])
