@@ -192,12 +192,34 @@ def main():
     cmd([CMD_SET_STANDBY, 0x00], "SetStandby RC")
     print(f"{INFO} SetStandby(RC) sent")
 
-    cmd([CMD_SET_DIO3_TCXO, 0x07, 0x00, 0x01, 0x40], "SetDio3TCXO")
-    print(f"{INFO} TCXO configured (DIO3, 3.3V, 5ms delay)")
+    # Try TCXO at 3.3V first, then 1.8V, then skip entirely
+    tcxo_ok = False
+    for tcxo_voltage, label in [(0x07, "3.3V"), (0x02, "1.8V"), (None, "disabled")]:
+        cmd([CMD_SET_STANDBY, 0x00])
+        if tcxo_voltage is not None:
+            cmd([CMD_SET_DIO3_TCXO, tcxo_voltage, 0x00, 0x03, 0x20])  # 100ms delay
+            print(f"{INFO} Trying TCXO at {label}...")
+        else:
+            print(f"{INFO} Trying without TCXO (XTAL mode)...")
+        cmd([CMD_CALIBRATE, 0x7F], "Calibrate")
+        time.sleep(0.15)  # give TCXO time to stabilise
 
-    cmd([CMD_CALIBRATE, 0x7F], "Calibrate")
-    time.sleep(0.050)
-    print(f"{INFO} Calibration done")
+        # Check for calibration errors (register 0x0840)
+        err = cmd([0x17, 0x00, 0x00, 0x00], "GetDeviceErrors")
+        if err:
+            err_val = (err[2] << 8) | err[3]
+            if err_val == 0:
+                print(f"{PASS} TCXO {label} — no calibration errors")
+                tcxo_ok = True
+                tcxo_used = label
+                break
+            else:
+                print(f"{WARN} TCXO {label} — calibration errors: 0x{err_val:04X}")
+                cmd([0x07, 0x00, 0x00], "ClearDeviceErrors")
+    if not tcxo_ok:
+        print(f"{WARN} Continuing despite calibration errors")
+        tcxo_used = "unknown"
+    print(f"{INFO} Calibration done (TCXO {tcxo_used})")
 
     cmd([CMD_SET_REGULATOR_MODE, 0x01], "SetRegulatorMode DC-DC")
     cmd([CMD_SET_PACKET_TYPE, 0x01], "SetPacketType LoRa")
@@ -244,9 +266,25 @@ def main():
     cmd([CMD_CLEAR_IRQ, 0xFF, 0xFF], "ClearIrq pre-TX")
 
     lgpio.gpio_write(h, TXEN_PIN, 1)
-    cmd([CMD_SET_TX, 0x00, 0x00, 0x00], "SetTx")
-    print(f"{INFO} SetTx sent — watching for TX_DONE (max 5s)...")
+    # SetTx with 2-second hardware timeout (0x000C80 = 800 * 15.625µs ≈ 12.5ms...
+    # actually use 0x013880 = 80000 * 15.625µs = 1.25s hardware timeout)
+    cmd([CMD_SET_TX, 0x01, 0x38, 0x80], "SetTx with 1.25s timeout")
 
+    # Read chip mode immediately after SetTx
+    time.sleep(0.005)
+    st = cmd([CMD_GET_STATUS, 0x00], "GetStatus after SetTx")
+    if st:
+        mode_after = (st[1] >> 4) & 0x07
+        mode_names = {2: "STDBY_RC", 3: "STDBY_XOSC", 4: "FS", 5: "RX", 6: "TX"}
+        print(f"{INFO} Chip mode after SetTx: {mode_after} = {mode_names.get(mode_after, 'Unknown')}")
+        if mode_after == 6:
+            print(f"{PASS} Chip is transmitting")
+        elif mode_after == 2:
+            print(f"{FAIL} Chip stayed in standby — SetTx was ignored (likely TCXO/PLL issue)")
+        else:
+            print(f"{WARN} Unexpected mode {mode_after}")
+
+    print(f"{INFO} Watching for TX_DONE or TIMEOUT IRQ (max 5s)...")
     tx_ok = False
     deadline = time.time() + 5.0
     while time.time() < deadline:
@@ -257,23 +295,33 @@ def main():
             tx_ok = True
             break
         if irq & IRQ_TIMEOUT:
-            print(f"{FAIL} TX timeout IRQ — packet not sent")
+            print(f"{FAIL} TX timeout IRQ (0x{irq:04X}) — chip tried to TX but failed")
             break
         time.sleep(0.01)
 
     lgpio.gpio_write(h, TXEN_PIN, 0)
     cmd([CMD_CLEAR_IRQ, 0xFF, 0xFF], "ClearIrq post-TX")
 
+    # Check device errors after TX attempt
+    err2 = cmd([0x17, 0x00, 0x00, 0x00], "GetDeviceErrors post-TX")
+    if err2:
+        err_val2 = (err2[2] << 8) | err2[3]
+        if err_val2:
+            print(f"{WARN} Device errors after TX: 0x{err_val2:04X}")
+            if err_val2 & 0x0020: print("       - PLL lock failed")
+            if err_val2 & 0x0010: print("       - PLL calibration failed")
+            if err_val2 & 0x0001: print("       - RC64k calibration failed")
+            if err_val2 & 0x0002: print("       - RC13M calibration failed")
+            if err_val2 & 0x0004: print("       - PLL calibration failed")
+            if err_val2 & 0x0008: print("       - ADC calibration failed")
+            if err_val2 & 0x0100: print("       - PA ramp failed")
+
     if tx_ok:
         print(f"{PASS} TX_DONE received — packet sent successfully!")
-        print(f"       TX LED on module should have blinked")
+        print(f"       TX LED should have blinked. TCXO setting that worked: {tcxo_used}")
     else:
         irq_final = get_irq()
-        print(f"{FAIL} TX_DONE not received within 5s (IRQ=0x{irq_final or 0:04X})")
-        print("       Possible causes:")
-        print("       - TXEN wiring issue (GPIO6, pin 31)")
-        print("       - PA config mismatch")
-        print("       - TCXO not starting (try changing voltage: 0x02=1.8V, 0x07=3.3V)")
+        print(f"{FAIL} TX_DONE not received (IRQ=0x{irq_final or 0:04X})")
 
     # ------------------------------------------------------------------
     # 8. Summary
