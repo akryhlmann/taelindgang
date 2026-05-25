@@ -9,7 +9,7 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
     │ RTSP
     ▼
 ┌─────────────────────────────────┐
-│  Enhed 1: Raspberry Pi          │
+│  Enhed 1: Raspberry Pi 5        │
 │  + Hailo 8L AI-accelerator      │
 │                                 │
 │  • Person-detektion (YOLOv8s)   │
@@ -20,7 +20,7 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
                │ hvert 5. minut
                ▼
 ┌─────────────────────────────────┐
-│  Enhed 2: Raspberry Pi          │
+│  Enhed 2: Raspberry Pi 5        │
 │                                 │
 │  • LoRa modtager                │
 │  • Lokal SQLite                 │
@@ -38,14 +38,14 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 - **Live dashboard** – besøgstal og 15-minutters graf tilgængeligt lokalt på netværket
 - **Google Sheets** – automatisk synkronisering når enhed 2 har internet
 - **Skalerbar** – understøtter flere tælle-enheder til samme modtager
-- **Mock-tilstand** – begge enheder kan køre og testes uden hardware
+- **Debug-tilstand** – kør og test hele systemet uden kamera eller Hailo-hardware
 
 ## Hardware
 
 ### Enhed 1
 | Komponent | Specifikation |
 |-----------|--------------|
-| Raspberry Pi | 4B eller 5 |
+| Raspberry Pi | 5 |
 | AI-accelerator | Hailo 8L (M.2 HAT) |
 | Kamera | IP-kamera med RTSP-stream (Ethernet) |
 | LoRa modul | [Waveshare SX1262 LoRaWAN Node Module 868MHz](https://www.waveshare.com/sx1262-lorawan-hat.htm) |
@@ -53,7 +53,7 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 ### Enhed 2
 | Komponent | Specifikation |
 |-----------|--------------|
-| Raspberry Pi | 3B+, 4B eller 5 |
+| Raspberry Pi | 5 |
 | LoRa modul | [Waveshare SX1262 LoRaWAN Node Module 868MHz](https://www.waveshare.com/sx1262-lorawan-hat.htm) |
 | Netværk | LAN/WiFi til Google Sheets og dashboard-adgang |
 
@@ -77,6 +77,8 @@ Aktivér **SPI0**: `sudo raspi-config` → Interface Options → SPI → Enable
 
 > **BUSY-pin:** SX1262 kræver at BUSY er LAV inden enhver SPI-kommando. Dette håndteres automatisk af driveren.
 
+> **TCXO-note:** Waveshare-modulet har en always-on TCXO der er direkte forsynet fra 3.3V – den styres **ikke** via DIO3. Driveren er tilpasset hertil (kalibrering med maske `0x1F`, ingen `SetDio3AsTCXO`-kald).
+
 ## Projektstruktur
 
 ```
@@ -84,10 +86,10 @@ taelindgang/
 ├── shared/
 │   └── protocol.py              # LoRa besked-protokol med CRC16
 ├── device1/                     # Kamera + AI + tæller
-│   ├── config.yaml              # Konfiguration (RTSP, tællelinje, LoRa)
+│   ├── config.yaml              # Konfiguration (RTSP, tællelinje, LoRa, debug)
 │   ├── main.py                  # Hoved-loop
-│   ├── camera/rtsp_capture.py   # RTSP kamera (baggrundstråd, auto-reconnect)
-│   ├── ai/hailo_detector.py     # Hailo 8L person-detektion (YOLOv8)
+│   ├── camera/rtsp_capture.py   # RTSPCapture + MockCamera (debug-tilstand)
+│   ├── ai/hailo_detector.py     # HailoDetector + MockDetector (debug-tilstand)
 │   ├── counter/
 │   │   ├── tracker.py           # Centroid-baseret person-tracker
 │   │   └── line_counter.py      # Linje-krydsnings logik
@@ -101,7 +103,8 @@ taelindgang/
 │   ├── sync/google_sheets.py    # Google Sheets via service account
 │   └── dashboard/app.py         # Plotly Dash dashboard
 ├── tools/
-│   └── configure_line.py        # Visuelt tællelinje-konfigurationsværktøj
+│   ├── configure_line.py        # Visuelt tællelinje-konfigurationsværktøj
+│   └── lora_diagnostic.py       # SX1262 hardware-diagnostik (kør direkte på RPi)
 ├── setup/
 │   ├── install_device1.sh       # Installer + systemd service (enhed 1)
 │   └── install_device2.sh       # Installer + systemd service (enhed 2)
@@ -114,9 +117,16 @@ taelindgang/
 ### Forudsætninger (begge enheder)
 
 ```bash
-# Klon til din hjemmemappe — erstat 'anders' med dit brugernavn
+# Aktiver SPI
+sudo raspi-config   # Interface Options → SPI → Enable
+
+# Installer lgpio (kræves på Raspberry Pi 5)
+sudo apt install -y python3-lgpio
+
+# Klon til din hjemmemappe
 git clone https://github.com/akryhlmann/taelindgang.git ~/taelindgang
 cd ~/taelindgang
+git checkout claude/visitor-counter-system-zvhjv
 ```
 
 ---
@@ -202,6 +212,9 @@ ai:
 
 lora:
   send_interval: 300    # Sekunder mellem LoRa-transmissioner (300 = 5 min)
+
+debug:
+  mock_camera: false    # Sæt til true for at teste uden kamera og Hailo
 ```
 
 **6. Start tjenesten**
@@ -265,6 +278,22 @@ Dashboard er tilgængeligt på: `http://<enhed2-ip>:8050`
 
 ---
 
+## Debug-tilstand (uden kamera og Hailo)
+
+Når kameraet ikke er tilgængeligt (eller du vil teste LoRa og tælle-logikken isoleret), kan enhed 1 køre med syntetisk kamera-input:
+
+```bash
+nano device1/config.yaml
+# Sæt:  debug.mock_camera: true
+sudo systemctl restart visitor-counter-device1
+```
+
+I debug-tilstand genererer `MockCamera` frames med orange person-figurer der bevæger sig hen over tællelinjen (skiftevis ind og ud, én person hvert 15. sekund). `MockDetector` finder figurerne via farvedetektion – resten af pipeline (tracker, linje-tæller, LoRa TX) kører uændret.
+
+For at skifte tilbage til rigtig RTSP/Hailo: sæt `mock_camera: false` og genstart tjenesten.
+
+---
+
 ## Dashboard
 
 Dashboardet viser i realtid:
@@ -285,24 +314,6 @@ Systemet understøtter flere Enhed 1-instanser til samme modtager:
 3. Enhed 2 identificerer automatisk nye enheder via `device_id` i pakkerne
 4. Dashboardet viser automatisk alle registrerede enheder i tabellen
 
-## Udvikling uden hardware (mock-tilstand)
-
-Alle moduler kører automatisk i mock-tilstand når hardware ikke er tilgængeligt:
-
-- **Hailo-detector** – genererer tilfældige person-detektioner
-- **LoRa TX/RX** – logger til konsollen i stedet for SPI
-- **LoRa modtager** – sender mock-pakker hvert 30. sekund
-
-```bash
-# Kør enhed 1 lokalt (ingen Raspberry Pi nødvendig)
-pip install -r requirements_device1.txt
-python -m device1.main
-
-# Kør enhed 2 lokalt
-pip install -r requirements_device2.txt
-python -m device2.main
-```
-
 ## LoRa-protokol
 
 Pakkeformat (20 bytes total):
@@ -320,28 +331,38 @@ Pakkeformat (20 bytes total):
 | Chip | SX1262 |
 | Max payload | 200 bytes |
 
-## Fejlfinding
+## LoRa diagnostik
 
-**Systemd-service starter ikke (`status=217/USER`)**
+Brug det medfølgende diagnostikscript til at verificere LoRa-hardware, inden du starter systemet:
+
 ```bash
-# Ret brugernavn i service-filen
-sudo sed -i 's/User=pi/User=DITBRUGERNAVN/' /etc/systemd/system/visitor-counter-device2.service
-sudo systemctl daemon-reload && sudo systemctl restart visitor-counter-device2
+sudo python3 tools/lora_diagnostic.py
 ```
+
+Scriptet tester SPI-kommunikation, chip-initialisering og sender en testpakke. Output viser `[PASS]`/`[FAIL]` for hvert trin og rapporterer chip-fejlkoder hvis noget går galt.
+
+## Fejlfinding
 
 **Kamera forbinder ikke**
 ```bash
 # Test RTSP-stream manuelt
 ffplay rtsp://192.168.1.100:554/stream
+
+# Alternativt: brug debug-tilstand mens kamera-problemet løses
+# Sæt debug.mock_camera: true i device1/config.yaml
 ```
 
-**LoRa sender/modtager ikke**
+**LoRa TX LED blinker ikke / sender ikke**
 ```bash
+# Kør diagnostikscript
+sudo python3 tools/lora_diagnostic.py
+
 # Verificér SPI er aktiveret
 ls /dev/spidev*   # Skal vise /dev/spidev0.0
 
-# Verificér BUSY-pin reagerer (skal gå lav efter reset)
-# Tjek GPIO-forbindelser: CS=21, RESET=18, BUSY=20, DIO1=16, TXEN=6
+# Verificér lgpio er installeret
+python3 -c "import lgpio; print('OK')"
+# Hvis fejl: sudo apt install -y python3-lgpio
 ```
 
 **Google Sheets opdateres ikke**
@@ -360,6 +381,7 @@ hailortcli scan
 
 **Hent seneste ændringer fra GitHub**
 ```bash
+cd ~/taelindgang
 git pull origin claude/visitor-counter-system-zvhjv
 ```
 
