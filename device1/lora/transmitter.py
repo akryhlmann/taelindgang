@@ -106,9 +106,9 @@ class LoRaTransmitter:
             self._reset()
             self._cmd([_CMD_SET_STANDBY, 0x00])
 
-            # TCXO on DIO3 at 3.3V, 5ms startup delay
-            self._cmd([_CMD_SET_DIO3_AS_TCXO, 0x07, 0x00, 0x01, 0x40])
-            self._cmd([_CMD_CALIBRATE, 0x7F])
+            # Module has always-on TCXO (not DIO3-controlled): skip XOSC startup
+            # bit 5 in calibrate mask so the chip uses the already-running oscillator
+            self._cmd([_CMD_CALIBRATE, 0x1F])
             time.sleep(0.05)
 
             self._cmd([_CMD_SET_REGULATOR_MODE, 0x01])
