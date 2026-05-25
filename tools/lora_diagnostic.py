@@ -84,19 +84,20 @@ def main():
     # ------------------------------------------------------------------
     # 3. Open SPI
     # ------------------------------------------------------------------
-    print(f"\n{INFO} Opening SPI bus {SPI_BUS}.{SPI_DEV}...")
+    print(f"\n{INFO} Opening SPI...")
     spi = None
-    for bus, dev in [(0, 0), (0, 1), (10, 0)]:
+    spi_bus_used, spi_dev_used = 0, 0
+    for try_bus, try_dev in [(0, 0), (0, 1), (10, 0)]:
         try:
             spi = spidev.SpiDev()
-            spi.open(bus, dev)
+            spi.open(try_bus, try_dev)
             spi.max_speed_hz = 1_000_000
             spi.mode = 0
-            print(f"{PASS} SPI opened (/dev/spidev{bus}.{dev})")
-            SPI_BUS, SPI_DEV = bus, dev
+            spi_bus_used, spi_dev_used = try_bus, try_dev
+            print(f"{PASS} SPI opened (/dev/spidev{try_bus}.{try_dev})")
             break
         except Exception as e:
-            print(f"{WARN} /dev/spidev{bus}.{dev} failed: {e}")
+            print(f"{WARN} /dev/spidev{try_bus}.{try_dev} failed: {e}")
             spi = None
     if spi is None:
         print(f"{FAIL} Could not open any SPI device")
