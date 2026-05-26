@@ -27,6 +27,8 @@ CMD_SET_RF_FREQUENCY    = 0x86
 CMD_SET_PA_CONFIG       = 0x95
 CMD_SET_REGULATOR_MODE  = 0x96
 CMD_SET_DIO3_TCXO       = 0x97
+CMD_CALIBRATE_IMAGE     = 0x98
+CMD_SET_DIO2_RF_SWITCH  = 0x9D
 CMD_CALIBRATE           = 0x89
 CMD_SET_TX_PARAMS       = 0x8E
 CMD_SET_BUFFER_BASE     = 0x8F
@@ -247,6 +249,13 @@ def main():
     cmd([CMD_SET_PACKET_TYPE, 0x01], "SetPacketType LoRa")
     print(f"{INFO} LoRa mode set")
 
+    # DIO2 as RF switch — required on Waveshare module for antenna switching
+    cmd([CMD_SET_DIO2_RF_SWITCH, 0x01], "SetDio2AsRfSwitch")
+    print(f"{INFO} DIO2 configured as RF antenna switch")
+
+    # Image calibration for 863-870 MHz before setting frequency
+    cmd([CMD_CALIBRATE_IMAGE, 0xD7, 0xDB], "CalibrateImage 868MHz")
+
     freq = 868_000_000
     freq_raw = int(freq / 32e6 * (1 << 25))
     cmd([CMD_SET_RF_FREQUENCY,
@@ -254,8 +263,9 @@ def main():
          (freq_raw >> 8) & 0xFF, freq_raw & 0xFF], "SetRfFrequency")
     print(f"{INFO} Frequency set to 868 MHz")
 
-    cmd([CMD_SET_PA_CONFIG, 0x04, 0x07, 0x00, 0x01], "SetPaConfig")
-    cmd([CMD_SET_TX_PARAMS, 14, 0x04], "SetTxParams +14dBm")
+    # PA config + TX params for +14 dBm on SX1262 (per Waveshare/Semtech datasheet)
+    cmd([CMD_SET_PA_CONFIG, 0x02, 0x02, 0x00, 0x01], "SetPaConfig +14dBm")
+    cmd([CMD_SET_TX_PARAMS, 0x16, 0x05], "SetTxParams +14dBm ramp800us")
     cmd([CMD_SET_BUFFER_BASE, 0x00, 0x00], "SetBufferBase")
     cmd([CMD_SET_MOD_PARAMS, 7, 0x04, 0x01, 0x00], "SetModulationParams SF7 BW125")
     cmd([CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, 0x05, 0x01, 0x00], "SetPacketParams")

@@ -9,8 +9,9 @@ _CMD_SET_STANDBY         = 0x80
 _CMD_SET_TX              = 0x83
 _CMD_SET_PA_CONFIG       = 0x95
 _CMD_SET_REGULATOR_MODE  = 0x96
-_CMD_SET_DIO3_AS_TCXO   = 0x97
 _CMD_CALIBRATE           = 0x89
+_CMD_CALIBRATE_IMAGE     = 0x98
+_CMD_SET_DIO2_RF_SWITCH  = 0x9D
 _CMD_SET_PACKET_TYPE     = 0x01
 _CMD_SET_RF_FREQUENCY    = 0x86
 _CMD_SET_TX_PARAMS       = 0x8E
@@ -114,6 +115,12 @@ class LoRaTransmitter:
             self._cmd([_CMD_SET_REGULATOR_MODE, 0x01])
             self._cmd([_CMD_SET_PACKET_TYPE, 0x01])
 
+            # DIO2 controls the on-board RF antenna switch (required on Waveshare module)
+            self._cmd([_CMD_SET_DIO2_RF_SWITCH, 0x01])
+
+            # Image calibration for 863-870 MHz band before setting frequency
+            self._cmd([_CMD_CALIBRATE_IMAGE, 0xD7, 0xDB])
+
             freq_raw = int(self._frequency / 32e6 * (1 << 25))
             self._cmd([
                 _CMD_SET_RF_FREQUENCY,
@@ -121,8 +128,9 @@ class LoRaTransmitter:
                 (freq_raw >> 8) & 0xFF,  freq_raw & 0xFF,
             ])
 
-            self._cmd([_CMD_SET_PA_CONFIG, 0x04, 0x07, 0x00, 0x01])
-            self._cmd([_CMD_SET_TX_PARAMS, max(-9, min(22, self._tx_power)) & 0xFF, 0x04])
+            # PA config + TX params for +14 dBm on SX1262
+            self._cmd([_CMD_SET_PA_CONFIG, 0x02, 0x02, 0x00, 0x01])
+            self._cmd([_CMD_SET_TX_PARAMS, 0x16, 0x05])
             self._cmd([_CMD_SET_BUFFER_BASE, 0x00, 0x00])
 
             bw_idx = _BW_MAP.get(self._bw, 0x04)

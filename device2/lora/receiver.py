@@ -8,13 +8,12 @@ logger = logging.getLogger(__name__)
 # SX1262 opcodes
 _CMD_SET_STANDBY         = 0x80
 _CMD_SET_RX              = 0x82
-_CMD_SET_PA_CONFIG       = 0x95
 _CMD_SET_REGULATOR_MODE  = 0x96
-_CMD_SET_DIO3_AS_TCXO   = 0x97
 _CMD_CALIBRATE           = 0x89
+_CMD_CALIBRATE_IMAGE     = 0x98
+_CMD_SET_DIO2_RF_SWITCH  = 0x9D
 _CMD_SET_PACKET_TYPE     = 0x01
 _CMD_SET_RF_FREQUENCY    = 0x86
-_CMD_SET_TX_PARAMS       = 0x8E
 _CMD_SET_BUFFER_BASE     = 0x8F
 _CMD_SET_MOD_PARAMS      = 0x8B
 _CMD_SET_PKT_PARAMS      = 0x8C
@@ -117,6 +116,12 @@ class LoRaReceiver:
 
             self._cmd([_CMD_SET_REGULATOR_MODE, 0x01])
             self._cmd([_CMD_SET_PACKET_TYPE, 0x01])
+
+            # DIO2 controls the on-board RF antenna switch (required on Waveshare module)
+            self._cmd([_CMD_SET_DIO2_RF_SWITCH, 0x01])
+
+            # Image calibration for 863-870 MHz band before setting frequency
+            self._cmd([_CMD_CALIBRATE_IMAGE, 0xD7, 0xDB])
 
             freq_raw = int(self._frequency / 32e6 * (1 << 25))
             self._cmd([
