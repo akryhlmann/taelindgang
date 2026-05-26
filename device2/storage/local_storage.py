@@ -193,6 +193,31 @@ class LocalStorage:
             ).fetchall()
         return [row["device_id"] for row in rows]
 
+    def get_device_lora_stats(self) -> List[dict]:
+        """Return latest RSSI, last packet time, and recent avg RSSI per device."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    d.device_id,
+                    d.last_seen,
+                    ce.rssi AS latest_rssi,
+                    (
+                        SELECT AVG(rssi) FROM (
+                            SELECT rssi FROM count_events
+                            WHERE device_id = d.device_id AND rssi IS NOT NULL
+                            ORDER BY timestamp DESC LIMIT 10
+                        )
+                    ) AS avg_rssi
+                FROM devices d
+                LEFT JOIN count_events ce ON ce.id = (
+                    SELECT MAX(id) FROM count_events WHERE device_id = d.device_id
+                )
+                ORDER BY d.first_seen
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_stats(self, since_hours: int = 24) -> dict:
         since = time.time() - since_hours * 3600
         with self._get_conn() as conn:

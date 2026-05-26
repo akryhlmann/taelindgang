@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -113,9 +114,46 @@ class DashApp:
                     ),
                     className="mb-4",
                 ),
+                dbc.Row(
+                    dbc.Col(
+                        dbc.Card(
+                            dbc.CardBody(
+                                [
+                                    html.H5("LoRa signalstatus", className="card-title"),
+                                    html.Div(id="lora-status"),
+                                ]
+                            ),
+                            className="shadow",
+                        )
+                    ),
+                    className="mb-4",
+                ),
             ],
             fluid=True,
         )
+
+        def _rssi_badge(rssi):
+            if rssi is None:
+                return dbc.Badge("–", color="secondary", className="ms-2")
+            if rssi >= -70:
+                color, label = "success", "Fremragende"
+            elif rssi >= -85:
+                color, label = "warning", "God"
+            elif rssi >= -100:
+                color, label = "orange", "Middel"
+            else:
+                color, label = "danger", "Svag"
+            return dbc.Badge(f"{rssi} dBm  {label}", color=color, className="ms-2")
+
+        def _time_ago(ts):
+            if ts is None:
+                return "–"
+            diff = int(time.time() - ts)
+            if diff < 60:
+                return f"{diff} sek. siden"
+            if diff < 3600:
+                return f"{diff // 60} min. siden"
+            return f"{diff // 3600} t. siden"
 
         @app.callback(
             Output("current-count", "children"),
@@ -123,9 +161,11 @@ class DashApp:
             Output("total-out", "children"),
             Output("timeseries-chart", "figure"),
             Output("device-table", "children"),
+            Output("lora-status", "children"),
             Input("interval", "n_intervals"),
         )
         def update_dashboard(n):
+            import time as _time
             stats = self._storage.get_stats(since_hours=24)
             current = stats.get("current", 0)
             total_in = stats.get("total_in", 0)
@@ -161,11 +201,13 @@ class DashApp:
                 height=350,
             )
 
-            devices = self._storage.get_all_devices()
+            lora_stats = self._storage.get_device_lora_stats()
+
+            # Device table — includes current total
             device_rows = []
-            for dev in devices:
-                dev_total = self._storage.get_current_total(device_id=dev)
-                device_rows.append({"Enhed": dev, "Nuværende": dev_total})
+            for s in lora_stats:
+                dev_total = self._storage.get_current_total(device_id=s["device_id"])
+                device_rows.append({"Enhed": s["device_id"], "Nuværende": dev_total})
 
             if device_rows:
                 table = dash_table.DataTable(
@@ -180,7 +222,51 @@ class DashApp:
             else:
                 table = html.P("Ingen enheder tilsluttet endnu.", className="text-muted")
 
-            return str(current), str(total_in), str(total_out), fig, table
+            # LoRa status cards — one per device
+            if lora_stats:
+                lora_cards = dbc.Row(
+                    [
+                        dbc.Col(
+                            dbc.Card(
+                                dbc.CardBody(
+                                    [
+                                        html.H6(s["device_id"], className="card-subtitle text-muted mb-2"),
+                                        html.Div(
+                                            [
+                                                html.Span("Seneste pakke:", className="text-muted me-1"),
+                                                html.Strong(_time_ago(s["last_seen"])),
+                                            ],
+                                            className="mb-1",
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Span("Seneste RSSI:", className="text-muted me-1"),
+                                                _rssi_badge(s["latest_rssi"]),
+                                            ],
+                                            className="mb-1",
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Span("Gns. RSSI (10 pkter):", className="text-muted me-1"),
+                                                _rssi_badge(
+                                                    round(s["avg_rssi"]) if s["avg_rssi"] is not None else None
+                                                ),
+                                            ],
+                                        ),
+                                    ]
+                                ),
+                                className="shadow-sm h-100",
+                            ),
+                            md=4,
+                            className="mb-3",
+                        )
+                        for s in lora_stats
+                    ]
+                )
+            else:
+                lora_cards = html.P("Ingen LoRa-enheder registreret endnu.", className="text-muted")
+
+            return str(current), str(total_in), str(total_out), fig, table, lora_cards
 
     def run(self, host: str = "0.0.0.0", port: int = 8050, debug: bool = False) -> None:
         if self._app is None:
