@@ -20,7 +20,7 @@ storage:
 
 google_sheets:
   credentials_file: "~/config/service_account.json"
-  spreadsheet_id: "YOUR_SPREADSHEET_ID"
+  spreadsheet_id: "1YOipFBhkIKjSxegqOIpOaN9grYlBB90s_eQxi90gcT8"
   worksheet_name: "Visitor Counts"
   sync_interval: 60
 
