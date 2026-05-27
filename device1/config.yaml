@@ -1,5 +1,5 @@
 device:
-  id: "DEV001"
+  id: "Hovedindgang"
   location: "main_entrance"
 
 camera:
