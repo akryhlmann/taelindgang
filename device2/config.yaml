@@ -1,6 +1,15 @@
 device:
   id: "RECEIVER_01"
 
+event:
+  name: "Mit Event"
+  schedule:
+    wednesday: {open: "10:00", close: "22:00"}
+    thursday:  {open: "10:00", close: "23:00"}
+    friday:    {open: "10:00", close: "23:00"}
+    saturday:  {open: "10:00", close: "23:00"}
+    sunday:    {open: "10:00", close: "18:00"}
+
 lora:
   # Waveshare SX1262 LoRaWAN Node Module — BCM pin numbers
   spi_bus: 0

@@ -1,8 +1,73 @@
+import datetime
 import logging
 import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Danish day names for display
+_DA = {
+    "monday": "Mandag", "tuesday": "Tirsdag", "wednesday": "Onsdag",
+    "thursday": "Torsdag", "friday": "Fredag", "saturday": "Lørdag",
+    "sunday": "Søndag",
+}
+
+
+def _parse_schedule(schedule: dict) -> list:
+    """Return list of (day_en, open_dt_today, close_dt_today) sorted by weekday.
+    Uses this week's actual calendar dates."""
+    DAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    today = datetime.date.today()
+    # Find Monday of the current week
+    monday = today - datetime.timedelta(days=today.weekday())
+    result = []
+    for day_en in DAY_ORDER:
+        if day_en not in schedule:
+            continue
+        sched = schedule[day_en]
+        day_idx = DAY_ORDER.index(day_en)
+        day_date = monday + datetime.timedelta(days=day_idx)
+        open_h,  open_m  = map(int, sched["open"].split(":"))
+        close_h, close_m = map(int, sched["close"].split(":"))
+        open_dt  = datetime.datetime(day_date.year, day_date.month, day_date.day,
+                                     open_h, open_m, 0)
+        close_dt = datetime.datetime(day_date.year, day_date.month, day_date.day,
+                                     close_h, close_m, 0)
+        result.append({
+            "day_en":   day_en,
+            "day_da":   _DA.get(day_en, day_en.capitalize()),
+            "date":     day_date,
+            "open_dt":  open_dt,
+            "close_dt": close_dt,
+            "open_ts":  open_dt.timestamp(),
+            "close_ts": close_dt.timestamp(),
+        })
+    return result
+
+
+def _time_ago(ts):
+    if ts is None:
+        return "–"
+    diff = int(time.time() - ts)
+    if diff < 60:
+        return f"{diff} sek. siden"
+    if diff < 3600:
+        return f"{diff // 60} min. siden"
+    return f"{diff // 3600} t. siden"
+
+
+def _rssi_badge(rssi, dbc):
+    if rssi is None:
+        return dbc.Badge("–", color="secondary", className="ms-2")
+    if rssi >= -70:
+        color, label = "success", "Fremragende"
+    elif rssi >= -85:
+        color, label = "warning", "God"
+    elif rssi >= -100:
+        color, label = "orange", "Middel"
+    else:
+        color, label = "danger", "Svag"
+    return dbc.Badge(f"{rssi} dBm  {label}", color=color, className="ms-2")
 
 
 class DashApp:
@@ -20,20 +85,37 @@ class DashApp:
             import dash_bootstrap_components as dbc
             import plotly.graph_objects as go
             import pandas as pd
-            import datetime
+            import datetime as _dt
         except ImportError as exc:
             logger.error("Dashboard dependencies not available: %s", exc)
             return
 
-        dash_cfg = self._cfg.get("dashboard", {})
+        dash_cfg  = self._cfg.get("dashboard", {})
+        event_cfg = self._cfg.get("event", {})
         refresh_ms = dash_cfg.get("refresh_interval", 30) * 1000
+        event_name = event_cfg.get("name", "Event")
+        schedule = event_cfg.get("schedule", {})
 
         app = dash.Dash(
             __name__,
             external_stylesheets=[dbc.themes.FLATLY],
-            title="Besøgende Tæller",
+            title=f"{event_name} — Besøgende",
         )
         self._app = app
+
+        # Build tab list from schedule
+        days = _parse_schedule(schedule)
+        tab_ids = [d["day_en"] for d in days] + ["oversigt"]
+
+        def make_day_tab(d):
+            return dbc.Tab(
+                label=f"{d['day_da']} {d['date'].strftime('%d/%m')}",
+                tab_id=d["day_en"],
+            )
+
+        tabs = [make_day_tab(d) for d in days] + [
+            dbc.Tab(label="Alle dage", tab_id="oversigt")
+        ]
 
         app.layout = dbc.Container(
             [
@@ -41,296 +123,207 @@ class DashApp:
                 dbc.Row(
                     dbc.Col(
                         html.H1(
-                            "Besøgende Tæller",
+                            event_name,
                             className="text-center my-4 text-primary fw-bold",
                         )
                     )
                 ),
+                # ── Top KPI-kort (altid synlige, viser aktuel dag) ──
                 dbc.Row(
                     [
-                        dbc.Col(
-                            dbc.Card(
-                                dbc.CardBody(
-                                    [
-                                        html.H6("Nuværende besøgende", className="card-subtitle text-muted"),
-                                        html.H2(id="current-count", className="card-title text-primary display-4"),
-                                    ]
-                                ),
-                                className="shadow text-center",
-                            ),
-                            md=4,
-                        ),
-                        dbc.Col(
-                            dbc.Card(
-                                dbc.CardBody(
-                                    [
-                                        html.H6("Ind i dag", className="card-subtitle text-muted"),
-                                        html.H2(id="total-in", className="card-title text-success display-4"),
-                                    ]
-                                ),
-                                className="shadow text-center",
-                            ),
-                            md=4,
-                        ),
-                        dbc.Col(
-                            dbc.Card(
-                                dbc.CardBody(
-                                    [
-                                        html.H6("Ud i dag", className="card-subtitle text-muted"),
-                                        html.H2(id="total-out", className="card-title text-danger display-4"),
-                                    ]
-                                ),
-                                className="shadow text-center",
-                            ),
-                            md=4,
-                        ),
+                        dbc.Col(dbc.Card(dbc.CardBody([
+                            html.H6("Besøgende nu", className="card-subtitle text-muted"),
+                            html.H2(id="kpi-current", className="card-title text-primary display-4"),
+                        ]), className="shadow text-center"), md=4),
+                        dbc.Col(dbc.Card(dbc.CardBody([
+                            html.H6("Ind i dag", className="card-subtitle text-muted"),
+                            html.H2(id="kpi-in", className="card-title text-success display-4"),
+                        ]), className="shadow text-center"), md=4),
+                        dbc.Col(dbc.Card(dbc.CardBody([
+                            html.H6("Ud i dag", className="card-subtitle text-muted"),
+                            html.H2(id="kpi-out", className="card-title text-danger display-4"),
+                        ]), className="shadow text-center"), md=4),
                     ],
-                    className="mb-4",
+                    className="mb-3",
                 ),
-                dbc.Row(
-                    dbc.Col(
-                        dbc.Card(
-                            dbc.CardBody(
-                                [
-                                    html.H5("Besøgende over tid (seneste 24 timer)", className="card-title"),
-                                    dcc.Graph(id="timeseries-chart"),
-                                ]
-                            ),
-                            className="shadow",
-                        )
-                    ),
-                    className="mb-4",
+                html.Div(id="event-status-bar", className="mb-3"),
+                # ── Dagsfaner ──
+                dbc.Card(
+                    dbc.CardBody([
+                        dbc.Tabs(
+                            tabs,
+                            id="day-tabs",
+                            active_tab="oversigt",
+                        ),
+                        html.Div(id="tab-content", className="mt-3"),
+                    ]),
+                    className="shadow mb-4",
                 ),
+                # ── LoRa + Google Sheets status ──
                 dbc.Row(
-                    dbc.Col(
-                        dbc.Card(
-                            dbc.CardBody(
-                                [
-                                    html.H5("Enhedsoversigt", className="card-title"),
-                                    html.Div(id="device-table"),
-                                ]
-                            ),
-                            className="shadow",
-                        )
-                    ),
-                    className="mb-4",
-                ),
-                dbc.Row(
-                    dbc.Col(
-                        dbc.Card(
-                            dbc.CardBody(
-                                [
-                                    html.H5("LoRa signalstatus", className="card-title"),
-                                    html.Div(id="lora-status"),
-                                ]
-                            ),
-                            className="shadow",
-                        )
-                    ),
-                    className="mb-4",
-                ),
-                dbc.Row(
-                    dbc.Col(
-                        dbc.Card(
-                            dbc.CardBody(
-                                [
-                                    html.H5("Google Sheets synkronisering", className="card-title"),
-                                    html.Div(id="sheets-status"),
-                                ]
-                            ),
-                            className="shadow",
-                        )
-                    ),
+                    [
+                        dbc.Col(dbc.Card(dbc.CardBody([
+                            html.H5("LoRa signalstatus", className="card-title"),
+                            html.Div(id="lora-status"),
+                        ]), className="shadow"), md=6),
+                        dbc.Col(dbc.Card(dbc.CardBody([
+                            html.H5("Google Sheets synkronisering", className="card-title"),
+                            html.Div(id="sheets-status"),
+                        ]), className="shadow"), md=6),
+                    ],
                     className="mb-4",
                 ),
             ],
             fluid=True,
         )
 
-        def _rssi_badge(rssi):
-            if rssi is None:
-                return dbc.Badge("–", color="secondary", className="ms-2")
-            if rssi >= -70:
-                color, label = "success", "Fremragende"
-            elif rssi >= -85:
-                color, label = "warning", "God"
-            elif rssi >= -100:
-                color, label = "orange", "Middel"
-            else:
-                color, label = "danger", "Svag"
-            return dbc.Badge(f"{rssi} dBm  {label}", color=color, className="ms-2")
-
-        def _time_ago(ts):
-            if ts is None:
-                return "–"
-            diff = int(time.time() - ts)
-            if diff < 60:
-                return f"{diff} sek. siden"
-            if diff < 3600:
-                return f"{diff // 60} min. siden"
-            return f"{diff // 3600} t. siden"
-
+        # ── Auto-select correct day tab on load ──
         @app.callback(
-            Output("current-count", "children"),
-            Output("total-in", "children"),
-            Output("total-out", "children"),
-            Output("timeseries-chart", "figure"),
-            Output("device-table", "children"),
-            Output("lora-status", "children"),
-            Output("sheets-status", "children"),
+            Output("day-tabs", "active_tab"),
             Input("interval", "n_intervals"),
         )
-        def update_dashboard(n):
-            import time as _time
-            stats = self._storage.get_stats(since_hours=24)
-            current = stats.get("current", 0)
-            total_in = stats.get("total_in", 0)
-            total_out = stats.get("total_out", 0)
+        def set_active_tab(n):
+            if n > 0:
+                raise dash.exceptions.PreventUpdate
+            today_en = _dt.datetime.now().strftime("%A").lower()
+            if today_en in tab_ids:
+                return today_en
+            return "oversigt"
 
-            timeseries = self._storage.get_timeseries(hours=24, interval_minutes=15)
-            fig = go.Figure()
-            if timeseries:
-                df_data = {}
-                for row in timeseries:
-                    dev = row["device_id"]
-                    if dev not in df_data:
-                        df_data[dev] = {"x": [], "y": []}
-                    ts_dt = datetime.datetime.utcfromtimestamp(row["bucket"])
-                    df_data[dev]["x"].append(ts_dt)
-                    df_data[dev]["y"].append(row["peak_total"])
-                for dev, series in df_data.items():
-                    fig.add_trace(
-                        go.Scatter(
-                            x=series["x"],
-                            y=series["y"],
-                            mode="lines+markers",
-                            name=dev,
-                            line=dict(width=2),
-                        )
-                    )
-            fig.update_layout(
-                xaxis_title="Tid",
-                yaxis_title="Besøgende",
-                legend_title="Enhed",
-                hovermode="x unified",
-                margin=dict(l=40, r=20, t=20, b=40),
-                height=350,
-            )
+        # ── Main callback ──
+        @app.callback(
+            Output("kpi-current",      "children"),
+            Output("kpi-in",           "children"),
+            Output("kpi-out",          "children"),
+            Output("event-status-bar", "children"),
+            Output("tab-content",      "children"),
+            Output("lora-status",      "children"),
+            Output("sheets-status",    "children"),
+            Input("interval",  "n_intervals"),
+            Input("day-tabs",  "active_tab"),
+        )
+        def update_all(n, active_tab):
+            now_dt  = _dt.datetime.now()
+            today_en = now_dt.strftime("%A").lower()
 
-            lora_stats = self._storage.get_device_lora_stats()
-
-            # Device table — includes current total
-            device_rows = []
-            for s in lora_stats:
-                dev_total = self._storage.get_current_total(device_id=s["device_id"])
-                device_rows.append({"Enhed": s["device_id"], "Nuværende": dev_total})
-
-            if device_rows:
-                table = dash_table.DataTable(
-                    data=device_rows,
-                    columns=[{"name": c, "id": c} for c in device_rows[0].keys()],
-                    style_cell={"textAlign": "left", "padding": "8px"},
-                    style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"},
-                    style_data_conditional=[
-                        {"if": {"row_index": "odd"}, "backgroundColor": "#f2f2f2"}
-                    ],
+            # Today's event window for the KPI bar
+            today_sched = schedule.get(today_en, {})
+            if today_sched:
+                oh, om = map(int, today_sched["open"].split(":"))
+                ch, cm = map(int, today_sched["close"].split(":"))
+                today_open  = now_dt.replace(hour=oh, minute=om, second=0, microsecond=0)
+                today_close = now_dt.replace(hour=ch, minute=cm, second=0, microsecond=0)
+                today_stats = self._storage.get_stats_for_period(
+                    today_open.timestamp(), today_close.timestamp()
                 )
             else:
-                table = html.P("Ingen enheder tilsluttet endnu.", className="text-muted")
+                today_stats = {"current": 0, "total_in": 0, "total_out": 0}
 
-            # LoRa status cards — one per device
-            if lora_stats:
-                lora_cards = dbc.Row(
-                    [
-                        dbc.Col(
-                            dbc.Card(
-                                dbc.CardBody(
-                                    [
-                                        html.H6(s["device_id"], className="card-subtitle text-muted mb-2"),
-                                        html.Div(
-                                            [
-                                                html.Span("Seneste pakke:", className="text-muted me-1"),
-                                                html.Strong(_time_ago(s["last_seen"])),
-                                            ],
-                                            className="mb-1",
-                                        ),
-                                        html.Div(
-                                            [
-                                                html.Span("Seneste RSSI:", className="text-muted me-1"),
-                                                _rssi_badge(s["latest_rssi"]),
-                                            ],
-                                            className="mb-1",
-                                        ),
-                                        html.Div(
-                                            [
-                                                html.Span("Gns. RSSI (10 pkter):", className="text-muted me-1"),
-                                                _rssi_badge(
-                                                    round(s["avg_rssi"]) if s["avg_rssi"] is not None else None
-                                                ),
-                                            ],
-                                        ),
-                                    ]
-                                ),
-                                className="shadow-sm h-100",
-                            ),
-                            md=4,
-                            className="mb-3",
-                        )
-                        for s in lora_stats
-                    ]
+            kpi_current = str(today_stats["current"])
+            kpi_in      = str(today_stats["total_in"])
+            kpi_out     = str(today_stats["total_out"])
+
+            # ── Event status bar ──
+            if today_sched:
+                if now_dt < today_open:
+                    mins = int((today_open - now_dt).total_seconds() // 60)
+                    status_bar = dbc.Alert(
+                        f"⏳  Event åbner om {mins} minutter ({today_sched['open']})",
+                        color="info", className="mb-0 py-2",
+                    )
+                elif now_dt <= today_close:
+                    mins_left = int((today_close - now_dt).total_seconds() // 60)
+                    status_bar = dbc.Alert(
+                        f"🟢  Event er åbent — lukker om {mins_left} minutter ({today_sched['close']})",
+                        color="success", className="mb-0 py-2",
+                    )
+                else:
+                    status_bar = dbc.Alert(
+                        f"🔴  Event lukket for i dag ({today_sched['close']})",
+                        color="secondary", className="mb-0 py-2",
+                    )
+            else:
+                status_bar = dbc.Alert(
+                    "Ingen event planlagt i dag", color="light", className="mb-0 py-2"
                 )
+
+            # ── Tab content ──
+            if active_tab == "oversigt":
+                tab_content = _make_overview_tab(days, self._storage, go, _dt, dbc, html, dash_table)
+            else:
+                day_info = next((d for d in days if d["day_en"] == active_tab), None)
+                if day_info:
+                    tab_content = _make_day_tab_content(
+                        day_info, self._storage, go, _dt, dbc, html, dash_table
+                    )
+                else:
+                    tab_content = html.P("Ingen data.", className="text-muted")
+
+            # ── LoRa status ──
+            lora_stats = self._storage.get_device_lora_stats()
+            if lora_stats:
+                lora_cards = dbc.Row([
+                    dbc.Col(
+                        dbc.Card(dbc.CardBody([
+                            html.H6(s["device_id"], className="card-subtitle text-muted mb-2"),
+                            html.Div([
+                                html.Span("Seneste pakke:", className="text-muted me-1"),
+                                html.Strong(_time_ago(s["last_seen"])),
+                            ], className="mb-1"),
+                            html.Div([
+                                html.Span("Seneste RSSI:", className="text-muted me-1"),
+                                _rssi_badge(s["latest_rssi"], dbc),
+                            ], className="mb-1"),
+                            html.Div([
+                                html.Span("Gns. RSSI (10 pkter):", className="text-muted me-1"),
+                                _rssi_badge(
+                                    round(s["avg_rssi"]) if s["avg_rssi"] is not None else None,
+                                    dbc
+                                ),
+                            ]),
+                        ]), className="shadow-sm"),
+                        md=4, className="mb-2",
+                    )
+                    for s in lora_stats
+                ])
             else:
                 lora_cards = html.P("Ingen LoRa-enheder registreret endnu.", className="text-muted")
 
-            # Google Sheets status
+            # ── Google Sheets status ──
             sheets = self._sheets
             if sheets is None:
                 sheets_card = html.P("Google Sheets sync ikke konfigureret.", className="text-muted")
             else:
                 if sheets._mock_mode:
                     conn_badge = dbc.Badge("Mock tilstand", color="secondary")
-                    error_div = html.Small("gspread ikke installeret", className="text-muted")
+                    error_div  = html.Small("gspread ikke installeret", className="text-muted")
                 elif sheets.connected:
                     conn_badge = dbc.Badge("Forbundet", color="success")
-                    error_div = html.Span()
+                    error_div  = html.Span()
                 else:
                     conn_badge = dbc.Badge("Ikke forbundet", color="danger")
-                    err_text = sheets.last_error or "Ukendt fejl"
-                    # Truncate long error messages
-                    if len(err_text) > 80:
-                        err_text = err_text[:77] + "…"
-                    error_div = html.Small(err_text, className="text-danger d-block mt-1")
+                    err_text   = (sheets.last_error or "Ukendt fejl")[:80]
+                    error_div  = html.Small(err_text, className="text-danger d-block mt-1")
 
-                if sheets.last_sync_time:
-                    sync_ago = _time_ago(sheets.last_sync_time)
-                    sync_text = f"{sync_ago}  ({sheets.last_sync_rows} rækker)"
-                else:
-                    sync_text = "Ikke synkroniseret endnu"
-
-                sheets_card = dbc.Row(
-                    dbc.Col(
-                        [
-                            html.Div(
-                                [
-                                    html.Span("Status:", className="text-muted me-2"),
-                                    conn_badge,
-                                ],
-                                className="mb-2",
-                            ),
-                            html.Div(
-                                [
-                                    html.Span("Seneste sync:", className="text-muted me-1"),
-                                    html.Strong(sync_text),
-                                ],
-                                className="mb-1",
-                            ),
-                            error_div,
-                        ],
-                        md=6,
-                    )
+                sync_text = (
+                    f"{_time_ago(sheets.last_sync_time)}  ({sheets.last_sync_rows} rækker)"
+                    if sheets.last_sync_time else "Ikke synkroniseret endnu"
                 )
+                sheets_card = html.Div([
+                    html.Div([
+                        html.Span("Status:", className="text-muted me-2"),
+                        conn_badge,
+                    ], className="mb-2"),
+                    html.Div([
+                        html.Span("Seneste sync:", className="text-muted me-1"),
+                        html.Strong(sync_text),
+                    ], className="mb-1"),
+                    error_div,
+                ])
 
-            return str(current), str(total_in), str(total_out), fig, table, lora_cards, sheets_card
+            return (kpi_current, kpi_in, kpi_out,
+                    status_bar, tab_content,
+                    lora_cards, sheets_card)
 
     def run(self, host: str = "0.0.0.0", port: int = 8050, debug: bool = False) -> None:
         if self._app is None:
@@ -348,3 +341,161 @@ class DashApp:
         if self._app:
             return self._app.server
         return None
+
+
+# ── Helper: content for a single day tab ──────────────────────────────────────
+
+def _make_day_tab_content(day_info, storage, go, _dt, dbc, html, dash_table):
+    import datetime
+    now_dt = _dt.datetime.now()
+    is_future = day_info["date"] > now_dt.date()
+    is_today  = day_info["date"] == now_dt.date()
+
+    stats = storage.get_stats_for_period(day_info["open_ts"], day_info["close_ts"])
+    ts_data = storage.get_timeseries_for_period(
+        day_info["open_ts"], day_info["close_ts"], interval_minutes=15
+    )
+
+    open_str  = day_info["open_dt"].strftime("%H:%M")
+    close_str = day_info["close_dt"].strftime("%H:%M")
+
+    if is_future:
+        return html.Div([
+            dbc.Alert(
+                f"⏳  {day_info['day_da']} {day_info['date'].strftime('%d/%m')} — "
+                f"event åbner {open_str}",
+                color="light",
+            )
+        ])
+
+    # KPI row
+    kpi = dbc.Row([
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6("Besøgende (peak)", className="card-subtitle text-muted"),
+            html.H3(str(stats["peak"]), className="text-primary"),
+        ]), className="text-center shadow-sm"), md=3),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6("Ind", className="card-subtitle text-muted"),
+            html.H3(str(stats["total_in"]), className="text-success"),
+        ]), className="text-center shadow-sm"), md=3),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6("Ud", className="card-subtitle text-muted"),
+            html.H3(str(stats["total_out"]), className="text-danger"),
+        ]), className="text-center shadow-sm"), md=3),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6("Åbningstid", className="card-subtitle text-muted"),
+            html.H3(f"{open_str}–{close_str}", className="text-secondary"),
+        ]), className="text-center shadow-sm"), md=3),
+    ], className="mb-3")
+
+    # Time series chart
+    fig = go.Figure()
+    if ts_data:
+        by_dev = {}
+        for row in ts_data:
+            dev = row["device_id"]
+            by_dev.setdefault(dev, {"x": [], "y": []})
+            by_dev[dev]["x"].append(_dt.datetime.fromtimestamp(row["bucket"]))
+            by_dev[dev]["y"].append(row["peak_total"])
+        for dev, series in by_dev.items():
+            fig.add_trace(go.Scatter(
+                x=series["x"], y=series["y"],
+                mode="lines+markers", name=dev, line=dict(width=2),
+            ))
+
+    # Shade the event window
+    fig.add_vrect(
+        x0=day_info["open_dt"], x1=day_info["close_dt"],
+        fillcolor="rgba(0,200,100,0.07)", line_width=0,
+    )
+    fig.update_layout(
+        xaxis_title="Tid",
+        yaxis_title="Besøgende",
+        hovermode="x unified",
+        margin=dict(l=40, r=20, t=20, b=40),
+        height=300,
+    )
+
+    label = "I dag" if is_today else day_info["day_da"]
+    return html.Div([
+        html.H6(
+            f"{label}: {day_info['date'].strftime('%d. %B')}",
+            className="text-muted mb-3",
+        ),
+        kpi,
+        dcc_graph_placeholder := dbc.Card(dbc.CardBody([
+            dcc_import_shim(go, fig, _dt),
+        ]), className="shadow-sm"),
+    ])
+
+
+def dcc_import_shim(go, fig, _dt):
+    """Returns a Graph component — import dcc here to avoid circular issues."""
+    from dash import dcc
+    return dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+
+# ── Helper: overview tab ──────────────────────────────────────────────────────
+
+def _make_overview_tab(days, storage, go, _dt, dbc, html, dash_table):
+    rows = []
+    for d in days:
+        stats = storage.get_stats_for_period(d["open_ts"], d["close_ts"])
+        is_future = d["date"] > _dt.datetime.now().date()
+        rows.append({
+            "Dag":        f"{d['day_da']} {d['date'].strftime('%d/%m')}",
+            "Åbningstid": f"{d['open_dt'].strftime('%H:%M')}–{d['close_dt'].strftime('%H:%M')}",
+            "Ind":        str(stats["total_in"])  if not is_future else "–",
+            "Ud":         str(stats["total_out"]) if not is_future else "–",
+            "Peak":       str(stats["peak"])       if not is_future else "–",
+        })
+
+    # All-days time series chart
+    all_start = min(d["open_ts"]  for d in days)
+    all_end   = max(d["close_ts"] for d in days)
+    ts_data = storage.get_timeseries_for_period(all_start, all_end, interval_minutes=30)
+
+    fig = go.Figure()
+    if ts_data:
+        by_dev = {}
+        for row in ts_data:
+            dev = row["device_id"]
+            by_dev.setdefault(dev, {"x": [], "y": []})
+            by_dev[dev]["x"].append(_dt.datetime.fromtimestamp(row["bucket"]))
+            by_dev[dev]["y"].append(row["peak_total"])
+        for dev, series in by_dev.items():
+            fig.add_trace(go.Scatter(
+                x=series["x"], y=series["y"],
+                mode="lines+markers", name=dev, line=dict(width=2),
+            ))
+    # Shade each event day
+    for d in days:
+        fig.add_vrect(
+            x0=d["open_dt"], x1=d["close_dt"],
+            fillcolor="rgba(0,150,255,0.07)", line_width=0,
+        )
+    fig.update_layout(
+        xaxis_title="Tid",
+        yaxis_title="Besøgende",
+        hovermode="x unified",
+        margin=dict(l=40, r=20, t=20, b=40),
+        height=320,
+    )
+
+    from dash import dcc, dash_table as dt2
+    return html.Div([
+        html.H6("Oversigt over hele eventet", className="text-muted mb-3"),
+        dbc.Card(dbc.CardBody(dcc.Graph(figure=fig, config={"displayModeBar": False})),
+                 className="shadow-sm mb-3"),
+        dbc.Card(dbc.CardBody([
+            dt2.DataTable(
+                data=rows,
+                columns=[{"name": c, "id": c} for c in rows[0].keys()] if rows else [],
+                style_cell={"textAlign": "left", "padding": "8px"},
+                style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"},
+                style_data_conditional=[
+                    {"if": {"row_index": "odd"}, "backgroundColor": "#f2f2f2"}
+                ],
+            ) if rows else html.P("Ingen data endnu.", className="text-muted"),
+        ]), className="shadow-sm"),
+    ])

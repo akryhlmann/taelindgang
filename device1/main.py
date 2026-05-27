@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 import signal
@@ -51,6 +52,27 @@ def _expand_paths(obj):
 def _load_config(path: str) -> dict:
     with open(path, "r") as f:
         return _expand_paths(yaml.safe_load(f))
+
+
+def _event_window(schedule: dict) -> tuple:
+    """Return (open_dt, close_dt) for today, or (None, None) if today is not in schedule."""
+    day_name = datetime.datetime.now().strftime("%A").lower()
+    day = schedule.get(day_name)
+    if not day:
+        return None, None
+    now = datetime.datetime.now()
+    open_h,  open_m  = map(int, day["open"].split(":"))
+    close_h, close_m = map(int, day["close"].split(":"))
+    open_dt  = now.replace(hour=open_h,  minute=open_m,  second=0, microsecond=0)
+    close_dt = now.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
+    return open_dt, close_dt
+
+
+def _is_event_active(schedule: dict) -> bool:
+    open_dt, close_dt = _event_window(schedule)
+    if open_dt is None:
+        return False
+    return open_dt <= datetime.datetime.now() <= close_dt
 
 
 class Device1:
@@ -153,6 +175,7 @@ class Device1:
 
         device_id = self._cfg["device"]["id"]
         lora_interval = self._cfg["lora"]["send_interval"]
+        schedule = self._cfg.get("event", {}).get("schedule", {})
         last_lora_send = 0.0
         last_status_log = 0.0
         status_interval = 60.0
@@ -160,10 +183,20 @@ class Device1:
         prev_tracks: dict = {}
         line_counter: Optional[LineCounter] = None
         frame_dims_known = False
+        last_reset_date = datetime.date.today()
 
         self._logger.info("Device1 main loop started (device_id=%s)", device_id)
 
         while self._running:
+            # --- Midnight reset: nulstil tæller ved starten af ny dag ---
+            today = datetime.date.today()
+            if today != last_reset_date:
+                if line_counter is not None:
+                    line_counter.reset()
+                    self._logger.info("Daily counter reset for %s", today.isoformat())
+                last_reset_date = today
+                last_lora_send = 0.0  # Send straks ved ny dag
+
             frame = self._camera.get_frame()
             if frame is None:
                 time.sleep(0.05)
@@ -195,19 +228,26 @@ class Device1:
             prev_tracks = {oid: dict(data) for oid, data in tracks.items()}
 
             now = time.time()
+            # --- LoRa TX: send kun inden for event-åbningstider ---
+            event_active = _is_event_active(schedule) if schedule else True
             if now - last_lora_send >= lora_interval:
-                total_in, total_out = line_counter.get_totals()
-                self._send_lora_update(device_id, total_in, total_out)
-                last_lora_send = now
+                if event_active:
+                    total_in, total_out = line_counter.get_totals()
+                    self._send_lora_update(device_id, total_in, total_out)
+                    last_lora_send = now
+                else:
+                    # Opdater timer alligevel for ikke at sende burst ved åbning
+                    last_lora_send = now
 
             if now - last_status_log >= status_interval:
                 total_in, total_out = line_counter.get_totals()
                 self._logger.info(
-                    "Status: tracks=%d in=%d out=%d camera_ok=%s",
+                    "Status: tracks=%d in=%d out=%d camera_ok=%s event_active=%s",
                     len(tracks),
                     total_in,
                     total_out,
                     self._camera.is_connected(),
+                    event_active,
                 )
                 last_status_log = now
 

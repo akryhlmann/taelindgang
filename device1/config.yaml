@@ -8,7 +8,7 @@ camera:
   reconnect_interval: 5
 
 ai:
-  model_path: "~/models/yolov5m_person.hef"
+  model_path: "~/models/yolov8s.hef"
   confidence_threshold: 0.5
   input_width: 640
   input_height: 640
@@ -25,6 +25,17 @@ counting:
 storage:
   csv_path: "~/data/counts.csv"
   db_path: "~/data/visitor_counts.db"
+
+event:
+  name: "Mit Event"
+  # Åbningstider pr. dag — kun i disse tidsrum sendes LoRa-pakker
+  # Dage der ikke er angivet anses som lukkede
+  schedule:
+    wednesday: {open: "10:00", close: "22:00"}
+    thursday:  {open: "10:00", close: "23:00"}
+    friday:    {open: "10:00", close: "23:00"}
+    saturday:  {open: "10:00", close: "23:00"}
+    sunday:    {open: "10:00", close: "18:00"}
 
 lora:
   # Waveshare SX1262 LoRaWAN Node Module — BCM pin numbers

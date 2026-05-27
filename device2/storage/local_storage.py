@@ -218,6 +218,67 @@ class LocalStorage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_stats_for_period(self, start_ts: float, end_ts: float) -> dict:
+        """Stats within an explicit time window (e.g. one event day)."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    MAX(total)     AS peak,
+                    MAX(count_in)  AS total_in,
+                    MAX(count_out) AS total_out
+                FROM count_events
+                WHERE timestamp >= ? AND timestamp <= ?
+                """,
+                (start_ts, end_ts),
+            ).fetchone()
+            latest = conn.execute(
+                """
+                SELECT SUM(latest_total) FROM (
+                    SELECT total AS latest_total
+                    FROM count_events
+                    WHERE timestamp >= ? AND timestamp <= ?
+                      AND id IN (
+                        SELECT MAX(id) FROM count_events
+                        WHERE timestamp >= ? AND timestamp <= ?
+                        GROUP BY device_id
+                      )
+                )
+                """,
+                (start_ts, end_ts, start_ts, end_ts),
+            ).fetchone()
+        current = int(latest[0]) if latest and latest[0] else 0
+        if row and row["total_in"] is not None:
+            return {
+                "current": current,
+                "peak": int(row["peak"] or 0),
+                "total_in": int(row["total_in"] or 0),
+                "total_out": int(row["total_out"] or 0),
+            }
+        return {"current": current, "peak": 0, "total_in": 0, "total_out": 0}
+
+    def get_timeseries_for_period(
+        self, start_ts: float, end_ts: float, interval_minutes: int = 15
+    ) -> list:
+        interval_sec = interval_minutes * 60
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    CAST(timestamp / ? AS INTEGER) * ? AS bucket,
+                    device_id,
+                    MAX(total)     AS peak_total,
+                    MAX(count_in)  AS count_in,
+                    MAX(count_out) AS count_out
+                FROM count_events
+                WHERE timestamp >= ? AND timestamp <= ?
+                GROUP BY bucket, device_id
+                ORDER BY bucket
+                """,
+                (interval_sec, interval_sec, start_ts, end_ts),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_stats(self, since_hours: int = 24) -> dict:
         since = time.time() - since_hours * 3600
         with self._get_conn() as conn:
