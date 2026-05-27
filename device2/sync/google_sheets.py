@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,12 @@ class GoogleSheetsSync:
         self._summary_sheet = None
         self._mock_mode = False
 
+        # Status tracking — readable by the dashboard
+        self.last_sync_time: Optional[float] = None
+        self.last_sync_rows: int = 0
+        self.last_error: Optional[str] = None
+        self.connected: bool = False
+
         available, self._gspread, self._Credentials = _try_import_gspread()
         if not available:
             logger.warning("gspread not available, GoogleSheetsSync in mock mode")
@@ -52,8 +59,12 @@ class GoogleSheetsSync:
             self._spreadsheet = self._client.open_by_key(self._spreadsheet_id)
             self._worksheet = self._get_or_create_worksheet(self._worksheet_name)
             self._summary_sheet = self._get_or_create_worksheet("Summary")
+            self.connected = True
+            self.last_error = None
             logger.info("Connected to Google Sheets: %s", self._spreadsheet_id)
         except Exception as exc:
+            self.connected = False
+            self.last_error = str(exc)
             logger.error("Google Sheets connection failed: %s", exc)
             self._client = None
 
@@ -91,6 +102,9 @@ class GoogleSheetsSync:
 
     def sync(self, data: List[dict]) -> None:
         if self._mock_mode:
+            self.last_sync_time = time.time()
+            self.last_sync_rows = len(data)
+            self.connected = True
             logger.info("Google Sheets mock sync: %d rows", len(data))
             return
         if not data:
@@ -114,8 +128,14 @@ class GoogleSheetsSync:
                     item.get("total", 0),
                 ])
             self._worksheet.append_rows(rows, value_input_option="RAW")
+            self.last_sync_time = time.time()
+            self.last_sync_rows = len(rows)
+            self.connected = True
+            self.last_error = None
             logger.info("Synced %d rows to Google Sheets", len(rows))
         except Exception as exc:
+            self.connected = False
+            self.last_error = str(exc)
             logger.error("Google Sheets sync error: %s", exc)
 
     def update_summary_row(

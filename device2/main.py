@@ -158,7 +158,7 @@ class Device2:
         sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
         sync_thread.start()
 
-        self._dash_app = DashApp(storage=self._storage, config=cfg)
+        self._dash_app = DashApp(storage=self._storage, config=cfg, sheets=self._sheets)
         dash_thread = threading.Thread(
             target=self._dash_app.run,
             kwargs={"debug": False},

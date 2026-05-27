@@ -6,9 +6,10 @@ logger = logging.getLogger(__name__)
 
 
 class DashApp:
-    def __init__(self, storage, config: dict):
+    def __init__(self, storage, config: dict, sheets=None):
         self._storage = storage
         self._cfg = config
+        self._sheets = sheets
         self._app = None
         self._setup_app()
 
@@ -128,6 +129,20 @@ class DashApp:
                     ),
                     className="mb-4",
                 ),
+                dbc.Row(
+                    dbc.Col(
+                        dbc.Card(
+                            dbc.CardBody(
+                                [
+                                    html.H5("Google Sheets synkronisering", className="card-title"),
+                                    html.Div(id="sheets-status"),
+                                ]
+                            ),
+                            className="shadow",
+                        )
+                    ),
+                    className="mb-4",
+                ),
             ],
             fluid=True,
         )
@@ -162,6 +177,7 @@ class DashApp:
             Output("timeseries-chart", "figure"),
             Output("device-table", "children"),
             Output("lora-status", "children"),
+            Output("sheets-status", "children"),
             Input("interval", "n_intervals"),
         )
         def update_dashboard(n):
@@ -266,7 +282,55 @@ class DashApp:
             else:
                 lora_cards = html.P("Ingen LoRa-enheder registreret endnu.", className="text-muted")
 
-            return str(current), str(total_in), str(total_out), fig, table, lora_cards
+            # Google Sheets status
+            sheets = self._sheets
+            if sheets is None:
+                sheets_card = html.P("Google Sheets sync ikke konfigureret.", className="text-muted")
+            else:
+                if sheets._mock_mode:
+                    conn_badge = dbc.Badge("Mock tilstand", color="secondary")
+                    error_div = html.Small("gspread ikke installeret", className="text-muted")
+                elif sheets.connected:
+                    conn_badge = dbc.Badge("Forbundet", color="success")
+                    error_div = html.Span()
+                else:
+                    conn_badge = dbc.Badge("Ikke forbundet", color="danger")
+                    err_text = sheets.last_error or "Ukendt fejl"
+                    # Truncate long error messages
+                    if len(err_text) > 80:
+                        err_text = err_text[:77] + "…"
+                    error_div = html.Small(err_text, className="text-danger d-block mt-1")
+
+                if sheets.last_sync_time:
+                    sync_ago = _time_ago(sheets.last_sync_time)
+                    sync_text = f"{sync_ago}  ({sheets.last_sync_rows} rækker)"
+                else:
+                    sync_text = "Ikke synkroniseret endnu"
+
+                sheets_card = dbc.Row(
+                    dbc.Col(
+                        [
+                            html.Div(
+                                [
+                                    html.Span("Status:", className="text-muted me-2"),
+                                    conn_badge,
+                                ],
+                                className="mb-2",
+                            ),
+                            html.Div(
+                                [
+                                    html.Span("Seneste sync:", className="text-muted me-1"),
+                                    html.Strong(sync_text),
+                                ],
+                                className="mb-1",
+                            ),
+                            error_div,
+                        ],
+                        md=6,
+                    )
+                )
+
+            return str(current), str(total_in), str(total_out), fig, table, lora_cards, sheets_card
 
     def run(self, host: str = "0.0.0.0", port: int = 8050, debug: bool = False) -> None:
         if self._app is None:
