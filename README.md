@@ -154,7 +154,17 @@ RPi eth0:  192.168.10.1
 Kamera:    192.168.10.100  (eller anden ledig adresse)
 ```
 
-> **OBS:** RTSP-sti og port afhænger af kameraets model og firmware. Tjek kameraets manual eller prøv typiske stier som `/stream`, `/live`, `/h264`.
+> **TP-Link Tapo / Vigi RTSP-URL:**
+> ```
+> rtsp://brugernavn:adgangskode@192.168.10.100:554/stream1
+> ```
+> `brugernavn` og `adgangskode` er **Camera Account** — ikke din Tapo-app-konto.
+> Sættes i Tapo-appen: **Kamera → Indstillinger → Avanceret → Camera Account**
+>
+> - `/stream1` = HD hovedstream (anbefalet til detektion)
+> - `/stream2` = SD substream (lavere CPU-belastning)
+>
+> Ældre TP-Link IPC-serie: `rtsp://admin:adgangskode@192.168.10.100:554/h264/ch1/main/av_stream`
 
 Optionelle argumenter:
 ```bash
