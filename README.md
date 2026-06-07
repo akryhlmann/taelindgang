@@ -139,6 +139,36 @@ git checkout claude/visitor-counter-system-zvhjv
 bash setup/install_device1.sh
 ```
 
+**2. Konfigurér direkte kamera-netværk (Ethernet uden router)**
+
+Hvis IP-kameraet er forbundet direkte til RPi'ens Ethernet-port uden router eller switch:
+
+```bash
+sudo bash setup/configure_camera_network.sh
+```
+
+Scriptet konfigurerer `eth0` med statisk IP `192.168.10.1` og starter en DHCP-server der automatisk tildeler kameraet en adresse i `192.168.10.100–200`. Hvis kameraet registreres, opdateres `device1/config.yaml` automatisk med den tildelte IP.
+
+```
+RPi eth0:  192.168.10.1
+Kamera:    192.168.10.100  (eller anden ledig adresse)
+```
+
+> **OBS:** RTSP-sti og port afhænger af kameraets model og firmware. Tjek kameraets manual eller prøv typiske stier som `/stream`, `/live`, `/h264`.
+
+Optionelle argumenter:
+```bash
+sudo bash setup/configure_camera_network.sh --iface eth1      # andet interface
+sudo bash setup/configure_camera_network.sh --subnet 10.0.0   # andet subnet
+```
+
+Verifikation efter opsætning:
+```bash
+ip addr show eth0          # skal vise 192.168.10.1/24
+ping 192.168.10.100        # test forbindelse til kamera
+ip neigh show dev eth0     # vis ARP-tabel (alternative måde at finde kamera-IP)
+```
+
 Scriptet registrerer automatisk dit brugernavn og hjemmemappe, installerer Python-afhængigheder og opretter en systemd-service der starter ved boot.
 
 **2. Installer HailoRT SDK**
