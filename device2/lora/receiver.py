@@ -62,6 +62,7 @@ class LoRaReceiver:
         frequency: int = 868_000_000,
         spreading_factor: int = 7,
         bandwidth: int = 125_000,
+        force_mock: bool = False,
     ):
         self._spi_bus = spi_bus
         self._spi_device = spi_device
@@ -79,9 +80,17 @@ class LoRaReceiver:
         self._running = False
         self._rx_thread: Optional[threading.Thread] = None
 
+        if force_mock:
+            logger.warning("LoRaReceiver: mock mode forced by config — no real LoRa hardware used")
+            self._mock_mode = True
+            return
+
         hw_ok, spidev_mod, lgpio_mod = _try_import_hw()
         if not hw_ok:
-            logger.warning("spidev/lgpio not available — LoRaReceiver running in mock mode")
+            logger.warning(
+                "LoRaReceiver: spidev/lgpio not available — falling back to mock mode. "
+                "Install with: sudo apt install python3-lgpio && pip install spidev"
+            )
             self._mock_mode = True
         else:
             self._spidev = spidev_mod
@@ -215,7 +224,11 @@ class LoRaReceiver:
         sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..", "..")))
         from shared.protocol import encode_message, MessageType
         count_in = count_out = 0
-        logger.info("LoRaReceiver mock RX loop (packets every 30s)")
+        logger.warning(
+            "*** LoRaReceiver MOCK MODE ACTIVE — generating fake packets every 30s. "
+            "No real LoRa hardware is used. Set debug.mock_lora: false in config "
+            "and ensure spidev/lgpio are installed. ***"
+        )
         while self._running:
             time.sleep(30)
             if not self._running:
@@ -225,7 +238,7 @@ class LoRaReceiver:
             data = encode_message("DEV001", MessageType.COUNT_UPDATE,
                                   count_in, count_out, time.time())
             rssi = random.randint(-100, -60)
-            logger.info("Mock RX: in=%d out=%d rssi=%d", count_in, count_out, rssi)
+            logger.warning("*** MOCK RX (fake data): in=%d out=%d rssi=%d ***", count_in, count_out, rssi)
             try:
                 callback(data, rssi)
             except Exception as exc:

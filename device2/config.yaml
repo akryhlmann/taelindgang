@@ -38,6 +38,9 @@ dashboard:
   port: 8050
   refresh_interval: 30
 
+debug:
+  mock_lora: false  # Sæt til true for at simulere LoRa-modtagelse (ingen hardware nødvendig)
+
 logging:
   level: "INFO"
   log_file: "~/logs/device2.log"

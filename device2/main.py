@@ -139,6 +139,9 @@ class Device2:
         )
 
         lora_cfg = cfg["lora"]
+        debug_cfg = cfg.get("debug", {})
+        force_mock = debug_cfg.get("mock_lora", False)
+
         self._receiver = LoRaReceiver(
             spi_bus=lora_cfg["spi_bus"],
             spi_device=lora_cfg["spi_device"],
@@ -150,9 +153,14 @@ class Device2:
             frequency=lora_cfg["frequency"],
             spreading_factor=lora_cfg["spreading_factor"],
             bandwidth=lora_cfg["bandwidth"],
+            force_mock=force_mock,
         )
         if not self._receiver.initialize():
-            self._logger.error("LoRa receiver initialization failed")
+            self._logger.error(
+                "LoRa receiver initialization failed — hardware may not be connected. "
+                "Set debug.mock_lora: true in config to use mock mode explicitly."
+            )
+            return
         self._receiver.start_receiving(self._on_lora_packet)
 
         sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
