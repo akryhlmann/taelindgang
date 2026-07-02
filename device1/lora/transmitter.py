@@ -4,39 +4,36 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# SX1262 opcodes
-_CMD_SET_STANDBY         = 0x80
-_CMD_SET_TX              = 0x83
-_CMD_SET_PA_CONFIG       = 0x95
-_CMD_SET_REGULATOR_MODE  = 0x96
-_CMD_CALIBRATE           = 0x89
-_CMD_CALIBRATE_IMAGE     = 0x98
-_CMD_SET_DIO2_RF_SWITCH  = 0x9D
-_CMD_SET_PACKET_TYPE     = 0x01
-_CMD_SET_RF_FREQUENCY    = 0x86
-_CMD_SET_TX_PARAMS       = 0x8E
-_CMD_SET_BUFFER_BASE     = 0x8F
-_CMD_SET_MOD_PARAMS      = 0x8B
-_CMD_SET_PKT_PARAMS      = 0x8C
-_CMD_SET_DIO_IRQ         = 0x08
-_CMD_GET_IRQ             = 0x12
-_CMD_CLEAR_IRQ           = 0x02
-_CMD_WRITE_BUFFER        = 0x0E
-_CMD_WRITE_REGISTER      = 0x0D
-_CMD_READ_REGISTER       = 0x1D
+# SX1276 register map
+_REG_FIFO              = 0x00
+_REG_OP_MODE           = 0x01
+_REG_FR_MSB            = 0x06
+_REG_FR_MID            = 0x07
+_REG_FR_LSB            = 0x08
+_REG_PA_CONFIG         = 0x09
+_REG_PA_DAC            = 0x4D
+_REG_FIFO_ADDR_PTR     = 0x0D
+_REG_FIFO_TX_BASE_ADDR = 0x0E
+_REG_IRQ_FLAGS         = 0x12
+_REG_MODEM_CONFIG1     = 0x1D
+_REG_MODEM_CONFIG2     = 0x1E
+_REG_PREAMBLE_MSB      = 0x20
+_REG_PREAMBLE_LSB      = 0x21
+_REG_PAYLOAD_LENGTH    = 0x22
+_REG_SYNC_WORD         = 0x39
+_REG_VERSION           = 0x42
 
-_REG_SYNC_WORD_MSB  = 0x0740
-_REG_SYNC_WORD_LSB  = 0x0741
-_REG_TX_MODULATION  = 0x0889
-_REG_TX_CLAMP       = 0x08D8
+_MODE_SLEEP  = 0x00
+_MODE_STDBY  = 0x01
+_MODE_TX     = 0x03
+_LORA_FLAG   = 0x80
 
-_IRQ_TX_DONE = 0x0001
-_IRQ_TIMEOUT = 0x0200
+_IRQ_TX_DONE = 0x08
 
 _BW_MAP = {
-    7_800: 0x00, 10_400: 0x08, 15_600: 0x01, 20_800: 0x09,
-    31_250: 0x02, 41_700: 0x0A, 62_500: 0x03, 125_000: 0x04,
-    250_000: 0x05, 500_000: 0x06,
+    7_800: 0x00, 10_400: 0x01, 15_600: 0x02, 20_800: 0x03,
+    31_250: 0x04, 41_700: 0x05, 62_500: 0x06, 125_000: 0x07,
+    250_000: 0x08, 500_000: 0x09,
 }
 
 
@@ -54,25 +51,17 @@ class LoRaTransmitter:
         self,
         spi_bus: int = 0,
         spi_device: int = 0,
-        cs_pin: int = 21,
-        reset_pin: int = 18,
-        busy_pin: int = 20,
-        dio1_pin: int = 16,
-        txen_pin: int = 6,
+        reset_pin: int = 17,
         frequency: int = 868_000_000,
-        tx_power: int = 14,
+        tx_power: int = 17,
         spreading_factor: int = 7,
         bandwidth: int = 125_000,
     ):
         self._spi_bus = spi_bus
         self._spi_device = spi_device
-        self._cs_pin = cs_pin
         self._reset_pin = reset_pin
-        self._busy_pin = busy_pin
-        self._dio1_pin = dio1_pin
-        self._txen_pin = txen_pin
         self._frequency = frequency
-        self._tx_power = tx_power
+        self._tx_power = min(max(tx_power, 2), 20)
         self._sf = spreading_factor
         self._bw = bandwidth
         self._spi = None
@@ -94,13 +83,7 @@ class LoRaTransmitter:
         try:
             lg = self._lgpio
             self._gpio_handle = lg.gpiochip_open(0)
-            h = self._gpio_handle
-
-            lg.gpio_claim_output(h, self._cs_pin,    1)  # CS idle high
-            lg.gpio_claim_output(h, self._reset_pin, 1)
-            lg.gpio_claim_input(h,  self._busy_pin)
-            lg.gpio_claim_input(h,  self._dio1_pin)
-            lg.gpio_claim_output(h, self._txen_pin,  0)  # TXEN idle low
+            lg.gpio_claim_output(self._gpio_handle, self._reset_pin, 1)
 
             self._spi = self._spidev.SpiDev()
             self._spi.open(self._spi_bus, self._spi_device)
@@ -108,50 +91,54 @@ class LoRaTransmitter:
             self._spi.mode = 0
 
             self._reset()
-            self._cmd([_CMD_SET_STANDBY, 0x00])
 
-            # Module has always-on TCXO (not DIO3-controlled): skip XOSC startup
-            # bit 5 in calibrate mask so the chip uses the already-running oscillator
-            self._cmd([_CMD_CALIBRATE, 0x1F])
-            time.sleep(0.05)
+            ver = self._read_reg(_REG_VERSION)
+            if ver != 0x12:
+                logger.error("SX1276 version check failed: got 0x%02X (expected 0x12)", ver)
+                return False
 
-            self._cmd([_CMD_SET_REGULATOR_MODE, 0x01])
-            self._cmd([_CMD_SET_PACKET_TYPE, 0x01])
+            # Enter LoRa mode via sleep
+            self._write_reg(_REG_OP_MODE, _MODE_SLEEP)
+            time.sleep(0.01)
+            self._write_reg(_REG_OP_MODE, _LORA_FLAG | _MODE_SLEEP)
+            time.sleep(0.01)
+            self._write_reg(_REG_OP_MODE, _LORA_FLAG | _MODE_STDBY)
+            time.sleep(0.01)
 
-            # DIO2 controls the on-board RF antenna switch (required on Waveshare module)
-            self._cmd([_CMD_SET_DIO2_RF_SWITCH, 0x01])
+            # Frequency
+            frf = int(self._frequency / 32e6 * (1 << 19))
+            self._write_reg(_REG_FR_MSB, (frf >> 16) & 0xFF)
+            self._write_reg(_REG_FR_MID, (frf >>  8) & 0xFF)
+            self._write_reg(_REG_FR_LSB,  frf        & 0xFF)
 
-            # Image calibration for 863-870 MHz band before setting frequency
-            self._cmd([_CMD_CALIBRATE_IMAGE, 0xD7, 0xDB])
+            # PA config on PA_BOOST pin
+            if self._tx_power > 17:
+                # +20 dBm high-power mode
+                self._write_reg(_REG_PA_CONFIG, 0x8F)
+                self._write_reg(_REG_PA_DAC, 0x87)
+            else:
+                output_power = max(0, self._tx_power - 2)
+                self._write_reg(_REG_PA_CONFIG, 0x80 | output_power)
+                self._write_reg(_REG_PA_DAC, 0x84)
 
-            freq_raw = int(self._frequency / 32e6 * (1 << 25))
-            self._cmd([
-                _CMD_SET_RF_FREQUENCY,
-                (freq_raw >> 24) & 0xFF, (freq_raw >> 16) & 0xFF,
-                (freq_raw >> 8) & 0xFF,  freq_raw & 0xFF,
-            ])
+            # BW + CR 4/5 + explicit header
+            bw_bits = _BW_MAP.get(self._bw, 0x07)
+            self._write_reg(_REG_MODEM_CONFIG1, (bw_bits << 4) | 0x02)
+            # SF + CRC on
+            self._write_reg(_REG_MODEM_CONFIG2, (self._sf << 4) | 0x04)
 
-            # PA config + TX params for +14 dBm on SX1262
-            self._cmd([_CMD_SET_PA_CONFIG, 0x02, 0x02, 0x00, 0x01])
-            self._cmd([_CMD_SET_TX_PARAMS, 0x16, 0x05])
-            self._cmd([_CMD_SET_BUFFER_BASE, 0x00, 0x00])
+            # Preamble = 8 symbols
+            self._write_reg(_REG_PREAMBLE_MSB, 0x00)
+            self._write_reg(_REG_PREAMBLE_LSB, 0x08)
 
-            bw_idx = _BW_MAP.get(self._bw, 0x04)
-            self._cmd([_CMD_SET_MOD_PARAMS, self._sf, bw_idx, 0x01, 0x00])
-            self._cmd([_CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, 0xFF, 0x01, 0x00])
+            # Private network sync word
+            self._write_reg(_REG_SYNC_WORD, 0x12)
 
-            self._write_register(_REG_SYNC_WORD_MSB, 0x14)
-            self._write_register(_REG_SYNC_WORD_LSB, 0x24)
+            # FIFO TX base at 0
+            self._write_reg(_REG_FIFO_TX_BASE_ADDR, 0x00)
 
-            # SX1262 errata: fix TX clamp and PA ramp (Semtech AN)
-            self._write_register(_REG_TX_CLAMP,
-                                 self._read_register(_REG_TX_CLAMP) | 0x1E)
-
-            self._cmd([_CMD_SET_DIO_IRQ,
-                       0x02, 0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00])
-
-            logger.info("LoRaTransmitter (SX1262) initialized at %dMHz SF%d BW%dkHz",
-                        self._frequency // 1_000_000, self._sf, self._bw // 1_000)
+            logger.info("LoRaTransmitter (SX1276) initialized at %dMHz SF%d BW%dkHz +%ddBm",
+                        self._frequency // 1_000_000, self._sf, self._bw // 1_000, self._tx_power)
             return True
         except Exception as exc:
             logger.error("LoRa init failed: %s", exc)
@@ -162,38 +149,29 @@ class LoRaTransmitter:
             logger.info("LoRa mock TX: %d bytes", len(data))
             return True
         try:
-            lg = self._lgpio
-            h = self._gpio_handle
+            self._write_reg(_REG_OP_MODE, _LORA_FLAG | _MODE_STDBY)
 
-            self._cmd([_CMD_SET_STANDBY, 0x00])
-            self._cmd([_CMD_CLEAR_IRQ, 0xFF, 0xFF])
+            # Write payload to FIFO
+            self._write_reg(_REG_FIFO_ADDR_PTR, 0x00)
+            for b in data:
+                self._write_reg(_REG_FIFO, b)
+            self._write_reg(_REG_PAYLOAD_LENGTH, len(data))
 
-            payload = list(data)
-            self._cmd([_CMD_WRITE_BUFFER, 0x00] + payload)
-            self._cmd([_CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, len(payload), 0x01, 0x00])
-
-            # SX1262 errata: modulation fix for BW != 500kHz
-            bw_fix = self._read_register(_REG_TX_MODULATION)
-            bw_fix = bw_fix & 0xFB if self._bw == 500_000 else bw_fix | 0x04
-            self._write_register(_REG_TX_MODULATION, bw_fix)
-
-            # TXEN=LOW activates TX path on Waveshare module (PE4259 switch)
-            lg.gpio_write(h, self._txen_pin, 0)
-            self._cmd([_CMD_SET_TX, 0x00, 0x00, 0x00])
+            # Clear IRQ flags and start TX
+            self._write_reg(_REG_IRQ_FLAGS, 0xFF)
+            self._write_reg(_REG_OP_MODE, _LORA_FLAG | _MODE_TX)
 
             deadline = time.time() + 5.0
             while time.time() < deadline:
-                irq = self._get_irq()
-                if irq & _IRQ_TX_DONE:
-                    self._cmd([_CMD_CLEAR_IRQ, 0xFF, 0xFF])
+                if self._read_reg(_REG_IRQ_FLAGS) & _IRQ_TX_DONE:
+                    self._write_reg(_REG_IRQ_FLAGS, 0xFF)
+                    self._write_reg(_REG_OP_MODE, _LORA_FLAG | _MODE_STDBY)
                     logger.debug("LoRa TX done, %d bytes", len(data))
                     return True
-                if irq & _IRQ_TIMEOUT:
-                    logger.warning("LoRa TX timeout IRQ")
-                    break
                 time.sleep(0.005)
 
             logger.warning("LoRa TX did not complete")
+            self._write_reg(_REG_OP_MODE, _LORA_FLAG | _MODE_STDBY)
             return False
         except Exception as exc:
             logger.error("LoRa send error: %s", exc)
@@ -204,7 +182,7 @@ class LoRaTransmitter:
             return
         try:
             if self._spi:
-                self._cmd([_CMD_SET_STANDBY, 0x00])
+                self._write_reg(_REG_OP_MODE, _MODE_SLEEP)
                 self._spi.close()
             if self._gpio_handle is not None:
                 self._lgpio.gpiochip_close(self._gpio_handle)
@@ -217,39 +195,13 @@ class LoRaTransmitter:
         lg = self._lgpio
         h = self._gpio_handle
         lg.gpio_write(h, self._reset_pin, 0)
-        time.sleep(0.001)
+        time.sleep(0.01)
         lg.gpio_write(h, self._reset_pin, 1)
-        time.sleep(0.02)
-        self._wait_busy()
+        time.sleep(0.01)
 
-    def _wait_busy(self, timeout: float = 1.0) -> None:
-        deadline = time.time() + timeout
-        while self._lgpio.gpio_read(self._gpio_handle, self._busy_pin) == 1:
-            if time.time() > deadline:
-                raise TimeoutError("SX1262 BUSY timeout")
-            time.sleep(0.0001)
+    def _write_reg(self, reg: int, val: int) -> None:
+        self._spi.xfer2([reg | 0x80, val])
 
-    def _cmd(self, data: list) -> list:
-        self._wait_busy()
-        lg = self._lgpio
-        h = self._gpio_handle
-        lg.gpio_write(h, self._cs_pin, 0)
-        result = self._spi.xfer2(data)
-        lg.gpio_write(h, self._cs_pin, 1)
-        return result
-
-    def _write_register(self, address: int, value: int) -> None:
-        self._cmd([_CMD_WRITE_REGISTER, (address >> 8) & 0xFF, address & 0xFF, value])
-
-    def _read_register(self, address: int) -> int:
-        r = self._cmd([_CMD_READ_REGISTER, (address >> 8) & 0xFF, address & 0xFF, 0x00, 0x00])
-        return r[4]
-
-    def _get_irq(self) -> int:
-        self._wait_busy()
-        lg = self._lgpio
-        h = self._gpio_handle
-        lg.gpio_write(h, self._cs_pin, 0)
-        result = self._spi.xfer2([_CMD_GET_IRQ, 0x00, 0x00, 0x00])
-        lg.gpio_write(h, self._cs_pin, 1)
-        return (result[2] << 8) | result[3]
+    def _read_reg(self, reg: int) -> int:
+        r = self._spi.xfer2([reg & 0x7F, 0x00])
+        return r[1]

@@ -11,14 +11,10 @@ event:
     sunday:    {open: "10:00", close: "18:00"}
 
 lora:
-  # Waveshare SX1262 LoRaWAN Node Module — BCM pin numbers
+  # SX1276 868 MHz module — NSS=GPIO8 (CE0, hardware), RST=GPIO17
   spi_bus: 0
   spi_device: 0
-  cs_pin: 21
-  reset_pin: 18
-  busy_pin: 20
-  dio1_pin: 16
-  txen_pin: 6
+  reset_pin: 17
   frequency: 868000000
   spreading_factor: 7
   bandwidth: 125000

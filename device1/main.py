@@ -135,11 +135,7 @@ class Device1:
         self._lora = LoRaTransmitter(
             spi_bus=lora_cfg["spi_bus"],
             spi_device=lora_cfg["spi_device"],
-            cs_pin=lora_cfg["cs_pin"],
             reset_pin=lora_cfg["reset_pin"],
-            busy_pin=lora_cfg["busy_pin"],
-            dio1_pin=lora_cfg["dio1_pin"],
-            txen_pin=lora_cfg["txen_pin"],
             frequency=lora_cfg["frequency"],
             tx_power=lora_cfg["tx_power"],
             spreading_factor=lora_cfg["spreading_factor"],
