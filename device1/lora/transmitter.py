@@ -165,7 +165,8 @@ class LoRaTransmitter:
             self._cmd([_CMD_WRITE_BUFFER, 0x00] + payload)
             self._cmd([_CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, len(payload), 0x01, 0x00])
 
-            lg.gpio_write(h, self._txen_pin, 1)
+            # TXEN=LOW activates TX path on Waveshare module (PE4259 switch)
+            lg.gpio_write(h, self._txen_pin, 0)
             self._cmd([_CMD_SET_TX, 0x00, 0x00, 0x00])
 
             deadline = time.time() + 5.0
@@ -173,7 +174,6 @@ class LoRaTransmitter:
                 irq = self._get_irq()
                 if irq & _IRQ_TX_DONE:
                     self._cmd([_CMD_CLEAR_IRQ, 0xFF, 0xFF])
-                    lg.gpio_write(h, self._txen_pin, 0)
                     logger.debug("LoRa TX done, %d bytes", len(data))
                     return True
                 if irq & _IRQ_TIMEOUT:
@@ -181,13 +181,10 @@ class LoRaTransmitter:
                     break
                 time.sleep(0.005)
 
-            lg.gpio_write(h, self._txen_pin, 0)
             logger.warning("LoRa TX did not complete")
             return False
         except Exception as exc:
             logger.error("LoRa send error: %s", exc)
-            if self._gpio_handle is not None:
-                self._lgpio.gpio_write(self._gpio_handle, self._txen_pin, 0)
             return False
 
     def close(self) -> None:

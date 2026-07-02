@@ -189,6 +189,11 @@ class LoRaReceiver:
             self._mock_rx_loop(callback)
             return
 
+        # TXEN=HIGH activates RX path on Waveshare module (PE4259 switch)
+        lg = self._lgpio
+        h = self._gpio_handle
+        lg.gpio_write(h, self._txen_pin, 1)
+
         self._cmd([_CMD_SET_RX, 0xFF, 0xFF, 0xFF])
         logger.info("Listening for LoRa packets (continuous RX)...")
 

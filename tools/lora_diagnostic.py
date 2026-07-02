@@ -297,7 +297,8 @@ def main():
     cmd([CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, len(payload), 0x01, 0x00], "SetPacketParams")
     cmd([CMD_CLEAR_IRQ, 0xFF, 0xFF], "ClearIrq pre-TX")
 
-    lgpio.gpio_write(h, TXEN_PIN, 1)
+    # TXEN=LOW activates TX path on Waveshare module (opposite of what you'd expect)
+    lgpio.gpio_write(h, TXEN_PIN, 0)
     # SetTx with 2-second hardware timeout (0x000C80 = 800 * 15.625µs ≈ 12.5ms...
     # actually use 0x013880 = 80000 * 15.625µs = 1.25s hardware timeout)
     cmd([CMD_SET_TX, 0x01, 0x38, 0x80], "SetTx with 1.25s timeout")
@@ -331,7 +332,6 @@ def main():
             break
         time.sleep(0.01)
 
-    lgpio.gpio_write(h, TXEN_PIN, 0)
     cmd([CMD_CLEAR_IRQ, 0xFF, 0xFF], "ClearIrq post-TX")
 
     # Check device errors after TX attempt
