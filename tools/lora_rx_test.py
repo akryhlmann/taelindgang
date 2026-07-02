@@ -80,6 +80,10 @@ def main():
     def write_reg(addr, val):
         cmd([0x0D, (addr >> 8) & 0xFF, addr & 0xFF, val])
 
+    def read_reg(addr):
+        r = cmd([0x1D, (addr >> 8) & 0xFF, addr & 0xFF, 0x00, 0x00])
+        return r[4]
+
     def get_irq():
         wait_busy()
         lg.gpio_write(h, CS_PIN, 0)
@@ -117,6 +121,9 @@ def main():
 
     write_reg(0x0740, 0x14)                    # Sync word MSB
     write_reg(0x0741, 0x24)                    # Sync word LSB
+
+    # SX1262 errata: fix TX clamp and PA ramp (Semtech AN)
+    write_reg(0x08D8, read_reg(0x08D8) | 0x1E)
 
     # IRQ: RX_DONE | CRC_ERROR | HEADER_ERROR | TIMEOUT on DIO1
     cmd([0x08, 0x02, 0x62, 0x02, 0x62, 0x00, 0x00, 0x00, 0x00])

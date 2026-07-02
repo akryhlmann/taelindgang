@@ -52,6 +52,10 @@ def main():
     def wreg(addr, val):
         cmd([0x0D, (addr>>8)&0xFF, addr&0xFF, val])
 
+    def rreg(addr):
+        r = cmd([0x1D, (addr>>8)&0xFF, addr&0xFF, 0x00, 0x00])
+        return r[4]
+
     # Reset + init
     lg.gpio_write(h, RESET_PIN, 0); time.sleep(0.001)
     lg.gpio_write(h, RESET_PIN, 1); time.sleep(0.02)
@@ -76,6 +80,7 @@ def main():
 
     wreg(0x0740, 0x14)   # Sync word (private 0x1424 = SX1262 default)
     wreg(0x0741, 0x24)
+    wreg(0x08D8, rreg(0x08D8) | 0x1E)   # SX1262 errata: TX clamp fix
     cmd([0x08, 0x02, 0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00])  # SetDioIrq
 
     print("Init OK — starting TX loop\n")
@@ -90,6 +95,9 @@ def main():
             cmd([0x0E, 0x00] + payload)  # WriteBuffer
             cmd([0x8C, 0x00, 0x0C, 0x00, len(payload), 0x01, 0x00])
 
+            # SX1262 errata: modulation fix for BW != 500kHz
+            wreg(0x0889, rreg(0x0889) | 0x04)
+
             # TXEN=LOW activates TX path on Waveshare module
             lg.gpio_write(h, TXEN_PIN, 0)
             cmd([0x83, 0x00, 0x00, 0x00])  # SetTx (no timeout)
@@ -97,7 +105,7 @@ def main():
             ok = False
             deadline = time.time() + 3.0
             while time.time() < deadline:
-                r = spi.xfer2([0x12, 0x00, 0x00, 0x00])  # GetIrq (no busy wait)
+                r = cmd([0x12, 0x00, 0x00, 0x00])  # GetIrq (with CS)
                 irq = (r[2] << 8) | r[3]
                 if irq & 0x0001:
                     ok = True

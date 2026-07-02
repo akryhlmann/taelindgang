@@ -23,9 +23,12 @@ _CMD_GET_IRQ             = 0x12
 _CMD_CLEAR_IRQ           = 0x02
 _CMD_WRITE_BUFFER        = 0x0E
 _CMD_WRITE_REGISTER      = 0x0D
+_CMD_READ_REGISTER       = 0x1D
 
-_REG_SYNC_WORD_MSB = 0x0740
-_REG_SYNC_WORD_LSB = 0x0741
+_REG_SYNC_WORD_MSB  = 0x0740
+_REG_SYNC_WORD_LSB  = 0x0741
+_REG_TX_MODULATION  = 0x0889
+_REG_TX_CLAMP       = 0x08D8
 
 _IRQ_TX_DONE = 0x0001
 _IRQ_TIMEOUT = 0x0200
@@ -140,6 +143,10 @@ class LoRaTransmitter:
             self._write_register(_REG_SYNC_WORD_MSB, 0x14)
             self._write_register(_REG_SYNC_WORD_LSB, 0x24)
 
+            # SX1262 errata: fix TX clamp and PA ramp (Semtech AN)
+            self._write_register(_REG_TX_CLAMP,
+                                 self._read_register(_REG_TX_CLAMP) | 0x1E)
+
             self._cmd([_CMD_SET_DIO_IRQ,
                        0x02, 0x01, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00])
 
@@ -164,6 +171,11 @@ class LoRaTransmitter:
             payload = list(data)
             self._cmd([_CMD_WRITE_BUFFER, 0x00] + payload)
             self._cmd([_CMD_SET_PKT_PARAMS, 0x00, 0x0C, 0x00, len(payload), 0x01, 0x00])
+
+            # SX1262 errata: modulation fix for BW != 500kHz
+            bw_fix = self._read_register(_REG_TX_MODULATION)
+            bw_fix = bw_fix & 0xFB if self._bw == 500_000 else bw_fix | 0x04
+            self._write_register(_REG_TX_MODULATION, bw_fix)
 
             # TXEN=LOW activates TX path on Waveshare module (PE4259 switch)
             lg.gpio_write(h, self._txen_pin, 0)
@@ -228,6 +240,10 @@ class LoRaTransmitter:
 
     def _write_register(self, address: int, value: int) -> None:
         self._cmd([_CMD_WRITE_REGISTER, (address >> 8) & 0xFF, address & 0xFF, value])
+
+    def _read_register(self, address: int) -> int:
+        r = self._cmd([_CMD_READ_REGISTER, (address >> 8) & 0xFF, address & 0xFF, 0x00, 0x00])
+        return r[4]
 
     def _get_irq(self) -> int:
         self._wait_busy()

@@ -24,9 +24,11 @@ _CMD_GET_RX_BUFFER_STATUS = 0x13
 _CMD_READ_BUFFER         = 0x1E
 _CMD_GET_PACKET_STATUS   = 0x14
 _CMD_WRITE_REGISTER      = 0x0D
+_CMD_READ_REGISTER       = 0x1D
 
-_REG_SYNC_WORD_MSB = 0x0740
-_REG_SYNC_WORD_LSB = 0x0741
+_REG_SYNC_WORD_MSB  = 0x0740
+_REG_SYNC_WORD_LSB  = 0x0741
+_REG_TX_CLAMP       = 0x08D8
 
 _IRQ_RX_DONE      = 0x0002
 _IRQ_CRC_ERROR    = 0x0040
@@ -147,6 +149,10 @@ class LoRaReceiver:
 
             self._write_register(_REG_SYNC_WORD_MSB, 0x14)
             self._write_register(_REG_SYNC_WORD_LSB, 0x24)
+
+            # SX1262 errata: fix TX clamp and PA ramp (Semtech AN)
+            self._write_register(_REG_TX_CLAMP,
+                                 self._read_register(_REG_TX_CLAMP) | 0x1E)
 
             # IRQ: RX_DONE | CRC_ERROR | HEADER_ERROR | TIMEOUT on DIO1
             self._cmd([_CMD_SET_DIO_IRQ,
@@ -278,6 +284,10 @@ class LoRaReceiver:
 
     def _write_register(self, address: int, value: int) -> None:
         self._cmd([_CMD_WRITE_REGISTER, (address >> 8) & 0xFF, address & 0xFF, value])
+
+    def _read_register(self, address: int) -> int:
+        r = self._cmd([_CMD_READ_REGISTER, (address >> 8) & 0xFF, address & 0xFF, 0x00, 0x00])
+        return r[4]
 
     def _get_irq(self) -> int:
         self._wait_busy()
