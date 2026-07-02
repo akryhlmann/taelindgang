@@ -134,13 +134,22 @@ def main():
         warn(f"Unexpected chip mode {mode} — RX may not be active")
 
     print(f"\nWaiting for packets on 868 MHz SF{SF} BW{BW//1000}kHz ...")
-    print("(Run lora_diagnostic.py on Device 1 to send a test packet)\n")
+    print("(Run lora_diagnostic.py on the OTHER device to send a test packet)\n")
     print("Press Ctrl+C to stop.\n")
 
     packets = 0
     start = time.time()
+    last_heartbeat = time.time()
     try:
         while True:
+            now = time.time()
+            if now - last_heartbeat >= 5.0:
+                elapsed = int(now - start)
+                r = cmd([0xC0, 0x00])
+                mode = (r[1] >> 4) & 0x07 if r else -1
+                print(f"  [{elapsed:3d}s] Still listening... chip mode={mode} (5=RX OK), packets={packets}", flush=True)
+                last_heartbeat = now
+
             irq = get_irq()
 
             if irq & 0x0002:  # RX_DONE
