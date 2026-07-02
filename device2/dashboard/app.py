@@ -128,6 +128,27 @@ class DashApp:
                         )
                     )
                 ),
+                # ── Enhedsvælger ──
+                dbc.Row(
+                    dbc.Col(
+                        dbc.InputGroup(
+                            [
+                                dbc.InputGroupText("Enhed"),
+                                dcc.Dropdown(
+                                    id="device-filter",
+                                    options=[{"label": "Alle enheder", "value": "__all__"}],
+                                    value="__all__",
+                                    clearable=False,
+                                    style={"minWidth": "220px", "flex": "1"},
+                                ),
+                            ],
+                            className="w-auto",
+                        ),
+                        width="auto",
+                    ),
+                    justify="end",
+                    className="mb-3",
+                ),
                 # ── Top KPI-kort (altid synlige, viser aktuel dag) ──
                 dbc.Row(
                     [
@@ -177,6 +198,17 @@ class DashApp:
             fluid=True,
         )
 
+        # ── Populate device dropdown ──
+        @app.callback(
+            Output("device-filter", "options"),
+            Input("interval", "n_intervals"),
+        )
+        def update_device_options(n):
+            devices = self._storage.get_all_devices()
+            opts = [{"label": "Alle enheder", "value": "__all__"}]
+            opts += [{"label": d, "value": d} for d in devices]
+            return opts
+
         # ── Auto-select correct day tab on load ──
         @app.callback(
             Output("day-tabs", "active_tab"),
@@ -199,12 +231,14 @@ class DashApp:
             Output("tab-content",      "children"),
             Output("lora-status",      "children"),
             Output("sheets-status",    "children"),
-            Input("interval",  "n_intervals"),
-            Input("day-tabs",  "active_tab"),
+            Input("interval",       "n_intervals"),
+            Input("day-tabs",       "active_tab"),
+            Input("device-filter",  "value"),
         )
-        def update_all(n, active_tab):
+        def update_all(n, active_tab, device_filter):
             now_dt  = _dt.datetime.now()
             today_en = now_dt.strftime("%A").lower()
+            selected_device = None if device_filter in (None, "__all__") else device_filter
 
             # Today's event window for the KPI bar
             today_sched = schedule.get(today_en, {})
@@ -214,7 +248,8 @@ class DashApp:
                 today_open  = now_dt.replace(hour=oh, minute=om, second=0, microsecond=0)
                 today_close = now_dt.replace(hour=ch, minute=cm, second=0, microsecond=0)
                 today_stats = self._storage.get_stats_for_period(
-                    today_open.timestamp(), today_close.timestamp()
+                    today_open.timestamp(), today_close.timestamp(),
+                    device_id=selected_device,
                 )
             else:
                 today_stats = {"current": 0, "total_in": 0, "total_out": 0}
@@ -249,12 +284,16 @@ class DashApp:
 
             # ── Tab content ──
             if active_tab == "oversigt":
-                tab_content = _make_overview_tab(days, self._storage, go, _dt, dbc, html, dash_table)
+                tab_content = _make_overview_tab(
+                    days, self._storage, go, _dt, dbc, html, dash_table,
+                    device_id=selected_device,
+                )
             else:
                 day_info = next((d for d in days if d["day_en"] == active_tab), None)
                 if day_info:
                     tab_content = _make_day_tab_content(
-                        day_info, self._storage, go, _dt, dbc, html, dash_table
+                        day_info, self._storage, go, _dt, dbc, html, dash_table,
+                        device_id=selected_device,
                     )
                 else:
                     tab_content = html.P("Ingen data.", className="text-muted")
@@ -345,15 +384,17 @@ class DashApp:
 
 # ── Helper: content for a single day tab ──────────────────────────────────────
 
-def _make_day_tab_content(day_info, storage, go, _dt, dbc, html, dash_table):
+def _make_day_tab_content(day_info, storage, go, _dt, dbc, html, dash_table, device_id=None):
     import datetime
     now_dt = _dt.datetime.now()
     is_future = day_info["date"] > now_dt.date()
     is_today  = day_info["date"] == now_dt.date()
 
-    stats = storage.get_stats_for_period(day_info["open_ts"], day_info["close_ts"])
+    stats = storage.get_stats_for_period(
+        day_info["open_ts"], day_info["close_ts"], device_id=device_id
+    )
     ts_data = storage.get_timeseries_for_period(
-        day_info["open_ts"], day_info["close_ts"], interval_minutes=15
+        day_info["open_ts"], day_info["close_ts"], interval_minutes=15, device_id=device_id,
     )
 
     open_str  = day_info["open_dt"].strftime("%H:%M")
@@ -437,10 +478,10 @@ def dcc_import_shim(go, fig, _dt):
 
 # ── Helper: overview tab ──────────────────────────────────────────────────────
 
-def _make_overview_tab(days, storage, go, _dt, dbc, html, dash_table):
+def _make_overview_tab(days, storage, go, _dt, dbc, html, dash_table, device_id=None):
     rows = []
     for d in days:
-        stats = storage.get_stats_for_period(d["open_ts"], d["close_ts"])
+        stats = storage.get_stats_for_period(d["open_ts"], d["close_ts"], device_id=device_id)
         is_future = d["date"] > _dt.datetime.now().date()
         rows.append({
             "Dag":        f"{d['day_da']} {d['date'].strftime('%d/%m')}",
@@ -453,7 +494,9 @@ def _make_overview_tab(days, storage, go, _dt, dbc, html, dash_table):
     # All-days time series chart
     all_start = min(d["open_ts"]  for d in days)
     all_end   = max(d["close_ts"] for d in days)
-    ts_data = storage.get_timeseries_for_period(all_start, all_end, interval_minutes=30)
+    ts_data = storage.get_timeseries_for_period(
+        all_start, all_end, interval_minutes=30, device_id=device_id,
+    )
 
     fig = go.Figure()
     if ts_data:

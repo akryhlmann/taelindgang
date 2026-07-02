@@ -218,34 +218,38 @@ class LocalStorage:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_stats_for_period(self, start_ts: float, end_ts: float) -> dict:
+    def get_stats_for_period(
+        self, start_ts: float, end_ts: float, device_id: Optional[str] = None
+    ) -> dict:
         """Stats within an explicit time window (e.g. one event day)."""
+        dev_clause = "AND device_id = ?" if device_id else ""
+        dev_p = (device_id,) if device_id else ()
         with self._get_conn() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT
                     MAX(total)     AS peak,
                     MAX(count_in)  AS total_in,
                     MAX(count_out) AS total_out
                 FROM count_events
-                WHERE timestamp >= ? AND timestamp <= ?
+                WHERE timestamp >= ? AND timestamp <= ? {dev_clause}
                 """,
-                (start_ts, end_ts),
+                (start_ts, end_ts) + dev_p,
             ).fetchone()
             latest = conn.execute(
-                """
+                f"""
                 SELECT SUM(latest_total) FROM (
                     SELECT total AS latest_total
                     FROM count_events
-                    WHERE timestamp >= ? AND timestamp <= ?
+                    WHERE timestamp >= ? AND timestamp <= ? {dev_clause}
                       AND id IN (
                         SELECT MAX(id) FROM count_events
-                        WHERE timestamp >= ? AND timestamp <= ?
+                        WHERE timestamp >= ? AND timestamp <= ? {dev_clause}
                         GROUP BY device_id
                       )
                 )
                 """,
-                (start_ts, end_ts, start_ts, end_ts),
+                (start_ts, end_ts) + dev_p + (start_ts, end_ts) + dev_p,
             ).fetchone()
         current = int(latest[0]) if latest and latest[0] else 0
         if row and row["total_in"] is not None:
@@ -258,12 +262,18 @@ class LocalStorage:
         return {"current": current, "peak": 0, "total_in": 0, "total_out": 0}
 
     def get_timeseries_for_period(
-        self, start_ts: float, end_ts: float, interval_minutes: int = 15
+        self,
+        start_ts: float,
+        end_ts: float,
+        interval_minutes: int = 15,
+        device_id: Optional[str] = None,
     ) -> list:
         interval_sec = interval_minutes * 60
+        dev_clause = "AND device_id = ?" if device_id else ""
+        dev_p = (device_id,) if device_id else ()
         with self._get_conn() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     CAST(timestamp / ? AS INTEGER) * ? AS bucket,
                     device_id,
@@ -271,11 +281,11 @@ class LocalStorage:
                     MAX(count_in)  AS count_in,
                     MAX(count_out) AS count_out
                 FROM count_events
-                WHERE timestamp >= ? AND timestamp <= ?
+                WHERE timestamp >= ? AND timestamp <= ? {dev_clause}
                 GROUP BY bucket, device_id
                 ORDER BY bucket
                 """,
-                (interval_sec, interval_sec, start_ts, end_ts),
+                (interval_sec, interval_sec, start_ts, end_ts) + dev_p,
             ).fetchall()
         return [dict(row) for row in rows]
 
