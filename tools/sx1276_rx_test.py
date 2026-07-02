@@ -129,6 +129,7 @@ def main():
     # Enter continuous RX
     write_reg(REG_IRQ_FLAGS, 0xFF)
     write_reg(REG_OP_MODE, LORA_FLAG | MODE_RXCONT)
+    time.sleep(0.01)   # allow mode transition
 
     mode = read_reg(REG_OP_MODE)
     print(f"[INFO] OpMode after SetRx: 0x{mode:02X} (0x85=RxCont+LoRa expected)")
