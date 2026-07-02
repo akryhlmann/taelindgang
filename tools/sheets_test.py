@@ -120,20 +120,34 @@ def main():
     try:
         sh = client.open_by_key(spreadsheet_id)
         ok(f'"{sh.title}"')
-    except gspread.exceptions.APIError as e:
-        status = e.response.status_code if hasattr(e, "response") else "?"
-        fail(
-            f"API-fejl {status}: {e}\n\n"
-            "  Mulige årsager:\n"
-            "  • Spreadsheet delt med service account-emailen ovenfor?\n"
-            "    (Del → Tilføj person → indsæt client_email, Editor)\n"
-            "  • Google Sheets API aktiveret i Google Cloud Console?\n"
-            "    https://console.cloud.google.com/apis/library/sheets.googleapis.com\n"
-            "  • Google Drive API aktiveret?\n"
-            "    https://console.cloud.google.com/apis/library/drive.googleapis.com"
-        )
     except Exception as e:
-        fail(str(e))
+        # Extract HTTP status if available (gspread 5.x and 6.x differ in structure)
+        status = None
+        for attr in ("response", "resp"):
+            r = getattr(e, attr, None)
+            if r is not None:
+                status = getattr(r, "status_code", None) or getattr(r, "status", None)
+                break
+
+        raw = repr(e) if not str(e).strip() else str(e)
+        hint = ""
+        if status == 403 or "403" in raw:
+            hint = (
+                "\n\n  Fejl 403 — ingen adgang. Tjek:\n"
+                f"  • Er spreadsheet delt med  {svc_email}  (Editor)?\n"
+                "    Åbn arket i browser → Del → Tilføj person → indsæt emailen\n"
+                "  • Er Google Sheets API aktiveret?\n"
+                "    https://console.cloud.google.com/apis/library/sheets.googleapis.com\n"
+                "  • Er Google Drive API aktiveret?\n"
+                "    https://console.cloud.google.com/apis/library/drive.googleapis.com"
+            )
+        elif status == 404 or "404" in raw:
+            hint = (
+                "\n\n  Fejl 404 — spreadsheet ikke fundet.\n"
+                f"  • Tjek at spreadsheet_id er korrekt: {spreadsheet_id}\n"
+                "    (Kopiér ID fra URL: docs.google.com/spreadsheets/d/<ID>/edit)"
+            )
+        fail(f"HTTP {status or '?'}: {raw}{hint}")
 
     # --- 5. Find worksheet ---
     step(f"Finder worksheet '{worksheet_name}'")
