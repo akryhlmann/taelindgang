@@ -125,8 +125,9 @@ def main():
     # SX1262 errata: fix TX clamp and PA ramp (Semtech AN)
     write_reg(0x08D8, read_reg(0x08D8) | 0x1E)
 
-    # IRQ: RX_DONE | CRC_ERROR | HEADER_ERROR | TIMEOUT on DIO1
-    cmd([0x08, 0x02, 0x62, 0x02, 0x62, 0x00, 0x00, 0x00, 0x00])
+    # IRQ: include PREAMBLE_DETECTED + SYNC_WORD_VALID for diagnostics
+    # mask = RX_DONE|PREAMBLE|SYNC|HEADER_VALID|HEADER_ERR|CRC_ERR|TIMEOUT = 0x027E
+    cmd([0x08, 0x02, 0x7E, 0x02, 0x7E, 0x00, 0x00, 0x00, 0x00])
 
     ok(f"Initialized: 868 MHz, SF{SF}, BW{BW//1000}kHz, sync=0x1424")
 
@@ -158,10 +159,15 @@ def main():
                 elapsed = int(now - start)
                 r = cmd([0xC0, 0x00])
                 mode = (r[1] >> 4) & 0x07 if r else -1
-                print(f"  [{elapsed:3d}s] Still listening... chip mode={mode} (5=RX OK), packets={packets}", flush=True)
+                raw_irq = get_irq()
+                irq_info = f"IRQ=0x{raw_irq:04X}"
+                if raw_irq & 0x0004: irq_info += " PREAMBLE"
+                if raw_irq & 0x0008: irq_info += " SYNC"
+                print(f"  [{elapsed:3d}s] mode={mode} (5=RX) pkts={packets} {irq_info}", flush=True)
                 last_heartbeat = now
 
             irq = get_irq()
+
 
             if irq & 0x0002:  # RX_DONE
                 cmd([0x02, 0xFF, 0xFF])  # ClearIrq all
