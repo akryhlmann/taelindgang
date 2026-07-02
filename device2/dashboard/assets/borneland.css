@@ -1,0 +1,57 @@
+/* Børneland brand theme */
+:root {
+  --bl-red:    #D11416;
+  --bl-teal:   #2BA8B0;
+  --bl-cream:  #FFF9F2;
+  --bl-orange: #F5A623;
+
+  /* Override Bootstrap 5 CSS custom properties */
+  --bs-primary:           #D11416;
+  --bs-primary-rgb:       209, 20, 22;
+  --bs-secondary:         #2BA8B0;
+  --bs-secondary-rgb:     43, 168, 176;
+  --bs-body-bg:           #FFF9F2;
+  --bs-body-font-family:  "Segoe UI", system-ui, sans-serif;
+}
+
+/* Body background */
+body { background-color: var(--bl-cream); }
+
+/* Headings */
+.text-primary { color: var(--bl-red) !important; }
+
+/* Buttons */
+.btn-primary {
+  --bs-btn-bg:               var(--bl-red);
+  --bs-btn-border-color:     var(--bl-red);
+  --bs-btn-hover-bg:         #b01214;
+  --bs-btn-hover-border-color: #b01214;
+  --bs-btn-active-bg:        #901012;
+}
+.btn-secondary {
+  --bs-btn-bg:           var(--bl-teal);
+  --bs-btn-border-color: var(--bl-teal);
+}
+
+/* Tabs — active tab uses brand red */
+.nav-tabs .nav-link { color: #555; }
+.nav-tabs .nav-link:hover { color: var(--bl-red); }
+.nav-tabs .nav-link.active {
+  color:        var(--bl-red);
+  border-color: #dee2e6 #dee2e6 #fff;
+  font-weight:  600;
+}
+
+/* Badges */
+.badge.bg-success { background-color: var(--bl-teal) !important; }
+
+/* Cards */
+.card { border: none; }
+.card .card-subtitle.text-muted { font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; }
+
+/* KPI display numbers */
+.display-4 { font-weight: 800; }
+
+/* Event status bar */
+.alert-success { background-color: #e6f7f8; border-color: var(--bl-teal); color: #1a7a80; }
+.alert-info    { background-color: #fef8ec; border-color: var(--bl-orange); color: #9a6200; }

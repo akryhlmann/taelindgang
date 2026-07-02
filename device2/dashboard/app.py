@@ -1,9 +1,35 @@
+import base64
 import datetime
 import logging
+import mimetypes
+import os
 import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Børneland brand colors — used for KPI card borders and chart traces
+_BL_RED    = "#D11416"
+_BL_TEAL   = "#2BA8B0"
+_BL_ORANGE = "#F5A623"
+_BL_PINK   = "#E91E8C"
+_BL_BLUE   = "#4FC3F7"
+BRAND_COLORS = [_BL_RED, _BL_TEAL, _BL_ORANGE, _BL_PINK, _BL_BLUE]
+
+
+def _load_logo(cfg: dict) -> Optional[str]:
+    """Load logo from dashboard.logo_path and return a base64 data URI, or None."""
+    path = cfg.get("dashboard", {}).get("logo_path", "")
+    if not path:
+        return None
+    path = os.path.expanduser(path)
+    if not os.path.exists(path):
+        logger.warning("Logo not found: %s", path)
+        return None
+    mime = mimetypes.guess_type(path)[0] or "image/png"
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    return f"data:{mime};base64,{b64}"
 
 # Danish day names for display
 _DA = {
@@ -96,9 +122,13 @@ class DashApp:
         event_name = event_cfg.get("name", "Event")
         schedule = event_cfg.get("schedule", {})
 
+        logo_src = _load_logo(self._cfg)
+
+        _assets = os.path.join(os.path.dirname(__file__), "assets")
         app = dash.Dash(
             __name__,
-            external_stylesheets=[dbc.themes.FLATLY],
+            assets_folder=_assets,
+            external_stylesheets=[dbc.themes.BOOTSTRAP],
             title=f"{event_name} — Besøgende",
         )
         self._app = app
@@ -122,9 +152,23 @@ class DashApp:
                 dcc.Interval(id="interval", interval=refresh_ms, n_intervals=0),
                 dbc.Row(
                     dbc.Col(
-                        html.H1(
-                            event_name,
-                            className="text-center my-4 text-primary fw-bold",
+                        html.Div(
+                            [
+                                html.Img(
+                                    src=logo_src,
+                                    style={
+                                        "height": "90px",
+                                        "objectFit": "contain",
+                                        "marginRight": "20px",
+                                    },
+                                ) if logo_src else None,
+                                html.H1(
+                                    event_name,
+                                    className="text-primary fw-bold mb-0",
+                                    style={"fontSize": "2.4rem"},
+                                ),
+                            ],
+                            className="d-flex align-items-center justify-content-center my-4",
                         )
                     )
                 ),
@@ -154,16 +198,22 @@ class DashApp:
                     [
                         dbc.Col(dbc.Card(dbc.CardBody([
                             html.H6("Besøgende nu", className="card-subtitle text-muted"),
-                            html.H2(id="kpi-current", className="card-title text-primary display-4"),
-                        ]), className="shadow text-center"), md=4),
+                            html.H2(id="kpi-current", className="card-title display-4",
+                                    style={"color": _BL_RED}),
+                        ]), className="shadow text-center",
+                           style={"borderTop": f"4px solid {_BL_RED}"}), md=4),
                         dbc.Col(dbc.Card(dbc.CardBody([
                             html.H6("Ind i dag", className="card-subtitle text-muted"),
-                            html.H2(id="kpi-in", className="card-title text-success display-4"),
-                        ]), className="shadow text-center"), md=4),
+                            html.H2(id="kpi-in", className="card-title display-4",
+                                    style={"color": _BL_TEAL}),
+                        ]), className="shadow text-center",
+                           style={"borderTop": f"4px solid {_BL_TEAL}"}), md=4),
                         dbc.Col(dbc.Card(dbc.CardBody([
                             html.H6("Ud i dag", className="card-subtitle text-muted"),
-                            html.H2(id="kpi-out", className="card-title text-danger display-4"),
-                        ]), className="shadow text-center"), md=4),
+                            html.H2(id="kpi-out", className="card-title display-4",
+                                    style={"color": _BL_ORANGE}),
+                        ]), className="shadow text-center",
+                           style={"borderTop": f"4px solid {_BL_ORANGE}"}), md=4),
                     ],
                     className="mb-3",
                 ),
@@ -438,10 +488,13 @@ def _make_day_tab_content(day_info, storage, go, _dt, dbc, html, dash_table, dev
             by_dev.setdefault(dev, {"x": [], "y": []})
             by_dev[dev]["x"].append(_dt.datetime.fromtimestamp(row["bucket"]))
             by_dev[dev]["y"].append(row["peak_total"])
-        for dev, series in by_dev.items():
+        for i, (dev, series) in enumerate(by_dev.items()):
+            color = BRAND_COLORS[i % len(BRAND_COLORS)]
             fig.add_trace(go.Scatter(
                 x=series["x"], y=series["y"],
-                mode="lines+markers", name=dev, line=dict(width=2),
+                mode="lines+markers", name=dev,
+                line=dict(width=2.5, color=color),
+                marker=dict(size=5, color=color),
             ))
 
     # Shade the event window
@@ -506,10 +559,13 @@ def _make_overview_tab(days, storage, go, _dt, dbc, html, dash_table, device_id=
             by_dev.setdefault(dev, {"x": [], "y": []})
             by_dev[dev]["x"].append(_dt.datetime.fromtimestamp(row["bucket"]))
             by_dev[dev]["y"].append(row["peak_total"])
-        for dev, series in by_dev.items():
+        for i, (dev, series) in enumerate(by_dev.items()):
+            color = BRAND_COLORS[i % len(BRAND_COLORS)]
             fig.add_trace(go.Scatter(
                 x=series["x"], y=series["y"],
-                mode="lines+markers", name=dev, line=dict(width=2),
+                mode="lines+markers", name=dev,
+                line=dict(width=2.5, color=color),
+                marker=dict(size=5, color=color),
             ))
     # Shade each event day
     for d in days:
