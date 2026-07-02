@@ -123,6 +123,10 @@ def main():
 
     ok(f"Initialized: 868 MHz, SF{SF}, BW{BW//1000}kHz, sync=0x1424")
 
+    # Set TXEN HIGH — on Waveshare module this enables the RF switch path
+    # (needed for both TX and RX, not just TX)
+    lg.gpio_write(h, TXEN_PIN, 1)
+
     # Enter continuous RX
     cmd([0x82, 0xFF, 0xFF, 0xFF])
     r = cmd([0xC0, 0x00])
