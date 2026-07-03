@@ -6,12 +6,12 @@ camera:
   # TP-Link Tapo / Vigi: rtsp://brugernavn:adgangskode@192.168.10.100:554/stream1
   # Camera Account sættes i Tapo-appen: Indstillinger → Avanceret → Camera Account
   # /stream1 = HD hovedstream, /stream2 = SD substream (lavere CPU-belastning)
-  rtsp_url: "rtsp://brugernavn:adgangskode@192.168.10.100:554/stream1"
+  rtsp_url: "rtsp://borneland:zikkestardust@192.168.10.13/stream1"
   fps_target: 10
   reconnect_interval: 5
 
 ai:
-  model_path: "~/models/yolov8s.hef"
+  model_path: "/usr/share/hailo-models/yolov8s_h8.hef"
   confidence_threshold: 0.5
   input_width: 640
   input_height: 640
@@ -52,8 +52,8 @@ lora:
   send_interval: 300
 
 debug:
-  mock_camera: true        # set to false to use real RTSP camera + Hailo
-  person_interval: 15.0   # seconds between simulated persons crossing the line
+  mock_camera: false
+  person_interval: 15.0
 
 logging:
   level: "INFO"
