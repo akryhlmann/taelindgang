@@ -79,6 +79,11 @@ def main():
     input_w    = ai_cfg.get("input_width",  640)
     input_h    = ai_cfg.get("input_height", 640)
 
+    # Open the OpenCV window BEFORE initialising GStreamer so GTK is claimed first,
+    # avoiding the GLib context conflict that causes a Pango crash.
+    win = "Hailo detection test"
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+
     print(f"Indlæser model: {model_path}")
     detector = HailoDetector(
         model_path=model_path,
@@ -99,9 +104,6 @@ def main():
         detector.close()
         sys.exit(1)
     print("Kamera forbundet. Tryk ESC eller Q for at afslutte.")
-
-    win = "Hailo detection test"
-    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 
     fps_t   = time.time()
     fps_cnt = 0

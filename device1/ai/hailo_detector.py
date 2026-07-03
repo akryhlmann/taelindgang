@@ -63,10 +63,10 @@ class HailoDetector:
         self._pipeline = None
         self._appsrc = None
         self._Gst = None
-        self._loop = None
-        self._loop_thread = None
         self._pts = 0
         self._hailo_mod = None
+        self._bus_running = False
+        self._bus_thread = None
 
         if not self._init_gstreamer():
             logger.warning("GStreamer/Hailo not available — running in mock mode")
@@ -76,7 +76,7 @@ class HailoDetector:
         try:
             import gi
             gi.require_version("Gst", "1.0")
-            from gi.repository import Gst, GLib
+            from gi.repository import Gst
             import hailo as hailo_mod
         except (ImportError, ValueError) as exc:
             logger.warning("GStreamer/hailo import failed: %s", exc)
@@ -117,11 +117,10 @@ class HailoDetector:
             logger.warning("Could not get appsrc/appsink elements from pipeline")
             return False
 
+        # new-sample is emitted from GStreamer's internal streaming thread — no GLib
+        # main loop needed. Avoid GLib.MainLoop entirely so we don't conflict with
+        # OpenCV's GTK backend when both run in the same process.
         appsink.connect("new-sample", self._on_new_sample)
-
-        bus = pipeline.get_bus()
-        bus.add_signal_watch()
-        bus.connect("message::error", self._on_gst_error)
 
         ret = pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
@@ -133,13 +132,30 @@ class HailoDetector:
         self._appsrc = appsrc
         self._Gst = Gst
 
-        # GLib main loop in daemon thread — needed for bus signals and appsink callbacks
-        self._loop = GLib.MainLoop()
-        self._loop_thread = threading.Thread(target=self._loop.run, daemon=True, name="gst-loop")
-        self._loop_thread.start()
+        # Poll bus for errors in a lightweight daemon thread (no GLib main loop)
+        self._bus_running = True
+        bus = pipeline.get_bus()
+        self._bus_thread = threading.Thread(
+            target=self._bus_watcher, args=(bus, Gst), daemon=True, name="gst-bus"
+        )
+        self._bus_thread.start()
 
         logger.info("HailoDetector ready (GStreamer, model=%s)", self._model_path)
         return True
+
+    def _bus_watcher(self, bus, Gst) -> None:
+        while self._bus_running:
+            msg = bus.timed_pop_filtered(
+                100 * Gst.MSECOND,
+                Gst.MessageType.ERROR | Gst.MessageType.EOS,
+            )
+            if msg is None:
+                continue
+            if msg.type == Gst.MessageType.ERROR:
+                err, debug = msg.parse_error()
+                logger.error("GStreamer pipeline error: %s — %s", err, debug)
+            elif msg.type == Gst.MessageType.EOS:
+                logger.warning("GStreamer pipeline EOS")
 
     def _on_new_sample(self, sink):
         sample = sink.emit("pull-sample")
@@ -171,10 +187,6 @@ class HailoDetector:
             logger.debug("Detection callback error: %s", exc)
 
         return self._Gst.FlowReturn.OK
-
-    def _on_gst_error(self, bus, msg):
-        err, debug = msg.parse_error()
-        logger.error("GStreamer pipeline error: %s — %s", err, debug)
 
     def detect(self, frame: np.ndarray) -> List[dict]:
         if self._mock_mode:
@@ -237,16 +249,12 @@ class HailoDetector:
         return detections
 
     def close(self) -> None:
+        self._bus_running = False
         if self._pipeline is not None:
             try:
                 self._pipeline.set_state(self._Gst.State.NULL)
             except Exception as exc:
                 logger.warning("Error stopping GStreamer pipeline: %s", exc)
-        if self._loop is not None:
-            try:
-                self._loop.quit()
-            except Exception:
-                pass
         logger.info("HailoDetector closed")
 
 
