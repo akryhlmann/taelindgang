@@ -3,5 +3,5 @@ numpy>=1.24.0
 pyyaml>=6.0
 spidev>=3.6
 lgpio>=0.2.2.0
-hailo_platform  # installed separately via HailoRT
+# hailo_platform — installed via: sudo apt install hailo-all (not pip)
 scipy>=1.11.0
