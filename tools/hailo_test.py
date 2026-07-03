@@ -151,6 +151,13 @@ def main():
         data = preprocess(frame, input_w, input_h)
         try:
             raw = infer(ng, in_params, out_params, input_name, data)
+            # Debug: print shape and first non-zero detections on first frame
+            if fps_cnt == 0:
+                print(f"[DEBUG] output shape: {np.array(raw).shape}")
+                nonzero = [d for d in raw if len(d) >= 5 and d[4] > 0.01]
+                print(f"[DEBUG] detektioner med conf>0.01: {len(nonzero)}")
+                if nonzero:
+                    print(f"[DEBUG] første detektion: {nonzero[0]}")
             display = draw_boxes(frame, raw, confidence)
         except Exception as exc:
             print(f"Inference fejl: {exc}")
