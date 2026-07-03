@@ -11,12 +11,15 @@ logger = logging.getLogger(__name__)
 
 PERSON_CLASS_ID = 0
 
-# Common locations for Hailo YOLO post-processing library (hailo-tappas-core)
+# Hailo YOLO post-processing library locations.
+# tappas 5.x: libyolo_hailortpp_post.so (note _post suffix, new path)
+# tappas 4.x: libyolo_hailortpp.so
 _POSTPROC_CANDIDATES = [
+    "/usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes/libyolo_hailortpp_post.so",
+    "/usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes/libyolo_hailortpp.so",
     "/usr/lib/hailo/post_proc/libyolo_hailortpp.so",
     "/usr/lib/aarch64-linux-gnu/hailo/post_proc/libyolo_hailortpp.so",
     "/usr/local/lib/hailo/post_proc/libyolo_hailortpp.so",
-    "/usr/lib/x86_64-linux-gnu/hailo/post_proc/libyolo_hailortpp.so",
 ]
 
 
@@ -85,8 +88,8 @@ class HailoDetector:
         postproc = _find_postproc_lib()
         if not postproc:
             logger.warning(
-                "libyolo_hailortpp.so not found — install hailo-tappas-core "
-                "or check /usr/lib/hailo/post_proc/"
+                "libyolo_hailortpp_post.so not found — "
+                "expected at /usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes/"
             )
             return False
 
