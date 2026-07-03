@@ -3,10 +3,12 @@ device:
   location: "main_entrance"
 
 camera:
-  # TP-Link Tapo / Vigi: rtsp://brugernavn:adgangskode@192.168.10.100:554/stream1
-  # Camera Account sættes i Tapo-appen: Indstillinger → Avanceret → Camera Account
-  # /stream1 = HD hovedstream, /stream2 = SD substream (lavere CPU-belastning)
-  rtsp_url: "rtsp://borneland:zikkestardust@192.168.10.13/stream1"
+  # TP-Link Tapo / Vigi — Camera Account sættes i Tapo-appen:
+  # Indstillinger → Avanceret → Camera Account
+  # /stream1 = HD, /stream2 = SD (lavere CPU-belastning)
+  rtsp_url: "rtsp://192.168.10.13/stream1"
+  username: "borneland"
+  password: "zikkestardust"
   fps_target: 10
   reconnect_interval: 5
 

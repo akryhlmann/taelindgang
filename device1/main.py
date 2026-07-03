@@ -102,8 +102,14 @@ class Device1:
             self._detector = MockDetector()
         else:
             cam_cfg = cfg["camera"]
+            rtsp_url = cam_cfg["rtsp_url"]
+            username = cam_cfg.get("username", "")
+            password = cam_cfg.get("password", "")
+            if username and "@" not in rtsp_url:
+                proto, rest = rtsp_url.split("://", 1)
+                rtsp_url = f"{proto}://{username}:{password}@{rest}"
             self._camera = RTSPCapture(
-                rtsp_url=cam_cfg["rtsp_url"],
+                rtsp_url=rtsp_url,
                 fps_target=cam_cfg["fps_target"],
                 reconnect_interval=cam_cfg["reconnect_interval"],
             )
