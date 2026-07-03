@@ -101,7 +101,7 @@ class HailoDetector:
             f'appsrc name=src format=time is-live=true block=true caps="{caps}" ! '
             f"videoconvert ! video/x-raw,format=RGB ! "
             f"hailonet hef-path={self._model_path} ! "
-            f'hailofilter so-path="{postproc}" function-name=yolov8 qos=false ! '
+            f'hailofilter so-path="{postproc}" function-name=yolov8s qos=false ! '
             f"appsink name=sink emit-signals=true drop=true max-buffers=1"
         )
 
