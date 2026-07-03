@@ -1,5 +1,8 @@
+import glob
 import logging
+import os
 import random
+import threading
 from typing import List, Optional
 
 import numpy as np
@@ -8,34 +11,37 @@ logger = logging.getLogger(__name__)
 
 PERSON_CLASS_ID = 0
 
+# Common locations for Hailo YOLO post-processing library (hailo-tappas-core)
+_POSTPROC_CANDIDATES = [
+    "/usr/lib/hailo/post_proc/libyolo_hailortpp.so",
+    "/usr/lib/aarch64-linux-gnu/hailo/post_proc/libyolo_hailortpp.so",
+    "/usr/local/lib/hailo/post_proc/libyolo_hailortpp.so",
+    "/usr/lib/x86_64-linux-gnu/hailo/post_proc/libyolo_hailortpp.so",
+]
 
-def _try_import_hailo():
-    try:
-        from hailo_platform import (
-            HEF,
-            VDevice,
-            HailoStreamInterface,
-            InferVStreams,
-            ConfigureParams,
-            InputVStreamParams,
-            OutputVStreamParams,
-            FormatType,
-        )
-        return True, {
-            "HEF": HEF,
-            "VDevice": VDevice,
-            "HailoStreamInterface": HailoStreamInterface,
-            "InferVStreams": InferVStreams,
-            "ConfigureParams": ConfigureParams,
-            "InputVStreamParams": InputVStreamParams,
-            "OutputVStreamParams": OutputVStreamParams,
-            "FormatType": FormatType,
-        }
-    except ImportError:
-        return False, {}
+
+def _find_postproc_lib() -> Optional[str]:
+    for path in _POSTPROC_CANDIDATES:
+        if os.path.exists(path):
+            return path
+    # Fallback: recursive search
+    found = (
+        glob.glob("/usr/**/libyolo_hailortpp.so", recursive=True)
+        + glob.glob("/opt/**/libyolo_hailortpp.so", recursive=True)
+    )
+    return found[0] if found else None
 
 
 class HailoDetector:
+    """
+    Person detector using Hailo-8L via GStreamer pipeline.
+
+    Pipeline: appsrc (BGR frames) → videoconvert (RGB) → hailonet → hailofilter
+              (YOLO post-processing) → appsink (ROI callbacks)
+
+    Falls back to mock mode if GStreamer/Hailo is not available.
+    """
+
     def __init__(
         self,
         model_path: str,
@@ -48,94 +54,164 @@ class HailoDetector:
         self._input_width = input_width
         self._input_height = input_height
         self._mock_mode = False
-        self._device = None
-        self._network_group = None
-        self._infer_pipeline = None
 
-        hailo_available, self._hailo = _try_import_hailo()
-        if not hailo_available:
-            logger.warning("hailo_platform not available, running in mock mode")
+        self._latest_detections: List[dict] = []
+        self._lock = threading.Lock()
+        self._pipeline = None
+        self._appsrc = None
+        self._Gst = None
+        self._loop = None
+        self._loop_thread = None
+        self._pts = 0
+        self._hailo_mod = None
+
+        if not self._init_gstreamer():
+            logger.warning("GStreamer/Hailo not available — running in mock mode")
             self._mock_mode = True
-        else:
-            self._initialize_hailo()
 
-    def _initialize_hailo(self) -> None:
+    def _init_gstreamer(self) -> bool:
         try:
-            hef = self._hailo["HEF"](self._model_path)
-            self._device = self._hailo["VDevice"]()
-            configure_params = self._hailo["ConfigureParams"].create_from_hef(
-                hef, interface=self._hailo["HailoStreamInterface"].PCIe
-            )
-            network_groups = self._device.configure(hef, configure_params)
-            self._network_group = network_groups[0]
+            import gi
+            gi.require_version("Gst", "1.0")
+            from gi.repository import Gst, GLib
+            import hailo as hailo_mod
+        except (ImportError, ValueError) as exc:
+            logger.warning("GStreamer/hailo import failed: %s", exc)
+            return False
 
-            input_vstreams_params = self._hailo["InputVStreamParams"].make_from_network_group(
-                self._network_group,
-                quantized=False,
-                format_type=self._hailo["FormatType"].FLOAT32,
-            )
-            output_vstreams_params = self._hailo["OutputVStreamParams"].make_from_network_group(
-                self._network_group,
-                quantized=False,
-                format_type=self._hailo["FormatType"].FLOAT32,
-            )
-            # Store input stream name — keys of InputVStreamParams dict (HailoRT 4.x)
-            self._input_name = list(input_vstreams_params.keys())[0]
-            self._input_vstreams_params = input_vstreams_params
-            self._output_vstreams_params = output_vstreams_params
+        self._hailo_mod = hailo_mod
+        Gst.init(None)
 
-            logger.info("HailoDetector initialized with model: %s", self._model_path)
+        postproc = _find_postproc_lib()
+        if not postproc:
+            logger.warning(
+                "libyolo_hailortpp.so not found — install hailo-tappas-core "
+                "or check /usr/lib/hailo/post_proc/"
+            )
+            return False
+
+        logger.info("Post-processing library: %s", postproc)
+
+        w, h = self._input_width, self._input_height
+        caps = f"video/x-raw,format=BGR,width={w},height={h},framerate=10/1"
+        pipeline_str = (
+            f'appsrc name=src format=time is-live=true block=true caps="{caps}" ! '
+            f"videoconvert ! video/x-raw,format=RGB ! "
+            f"hailonet hef-path={self._model_path} ! "
+            f'hailofilter so-path="{postproc}" function-name=yolov8 qos=false ! '
+            f"appsink name=sink emit-signals=true drop=true max-buffers=1"
+        )
+
+        try:
+            pipeline = Gst.parse_launch(pipeline_str)
         except Exception as exc:
-            logger.error("Failed to initialize Hailo device: %s — switching to mock mode", exc)
-            self._mock_mode = True
+            logger.warning("GStreamer pipeline parse failed: %s", exc)
+            return False
+
+        appsrc = pipeline.get_by_name("src")
+        appsink = pipeline.get_by_name("sink")
+        if appsrc is None or appsink is None:
+            logger.warning("Could not get appsrc/appsink elements from pipeline")
+            return False
+
+        appsink.connect("new-sample", self._on_new_sample)
+
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_gst_error)
+
+        ret = pipeline.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            logger.warning("GStreamer pipeline failed to transition to PLAYING")
+            pipeline.set_state(Gst.State.NULL)
+            return False
+
+        self._pipeline = pipeline
+        self._appsrc = appsrc
+        self._Gst = Gst
+
+        # GLib main loop in daemon thread — needed for bus signals and appsink callbacks
+        self._loop = GLib.MainLoop()
+        self._loop_thread = threading.Thread(target=self._loop.run, daemon=True, name="gst-loop")
+        self._loop_thread.start()
+
+        logger.info("HailoDetector ready (GStreamer, model=%s)", self._model_path)
+        return True
+
+    def _on_new_sample(self, sink):
+        sample = sink.emit("pull-sample")
+        if not sample:
+            return self._Gst.FlowReturn.OK
+
+        buf = sample.get_buffer()
+        try:
+            roi = self._hailo_mod.get_roi_from_buffer(buf)
+            dets = []
+            for obj in roi.get_objects_typed(self._hailo_mod.HAILO_DETECTION):
+                if obj.get_class_id() != PERSON_CLASS_ID:
+                    continue
+                conf = obj.get_confidence()
+                if conf < self._confidence_threshold:
+                    continue
+                bbox = obj.get_bbox()
+                dets.append({
+                    "xmin_n": float(bbox.xmin()),
+                    "ymin_n": float(bbox.ymin()),
+                    "xmax_n": float(bbox.xmin() + bbox.width()),
+                    "ymax_n": float(bbox.ymin() + bbox.height()),
+                    "confidence": float(conf),
+                    "class_id": int(obj.get_class_id()),
+                })
+            with self._lock:
+                self._latest_detections = dets
+        except Exception as exc:
+            logger.debug("Detection callback error: %s", exc)
+
+        return self._Gst.FlowReturn.OK
+
+    def _on_gst_error(self, bus, msg):
+        err, debug = msg.parse_error()
+        logger.error("GStreamer pipeline error: %s — %s", err, debug)
 
     def detect(self, frame: np.ndarray) -> List[dict]:
         if self._mock_mode:
             return self._mock_detect(frame)
-        return self._hailo_detect(frame)
+        return self._gst_detect(frame)
 
-    def _preprocess(self, frame: np.ndarray) -> np.ndarray:
+    def _gst_detect(self, frame: np.ndarray) -> List[dict]:
         import cv2
-        resized = cv2.resize(frame, (self._input_width, self._input_height))
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        normalized = rgb.astype(np.float32) / 255.0
-        return np.expand_dims(normalized, axis=0)
-
-    def _hailo_detect(self, frame: np.ndarray) -> List[dict]:
         frame_h, frame_w = frame.shape[:2]
-        input_data = self._preprocess(frame)
+
+        if frame_w != self._input_width or frame_h != self._input_height:
+            resized = cv2.resize(frame, (self._input_width, self._input_height))
+        else:
+            resized = frame
+
+        buf = self._Gst.Buffer.new_wrapped(resized.tobytes())
+        buf.pts = self._pts
+        buf.duration = self._Gst.SECOND // 10
+        self._pts += buf.duration
+
+        ret = self._appsrc.emit("push-buffer", buf)
+        if ret != self._Gst.FlowReturn.OK:
+            logger.warning("push-buffer returned: %s", ret)
+            return []
+
+        with self._lock:
+            raw = list(self._latest_detections)
+
         results = []
-        try:
-            with self._network_group.activate():
-                with self._hailo["InferVStreams"](
-                    self._network_group,
-                    self._input_vstreams_params,
-                    self._output_vstreams_params,
-                ) as pipeline:
-                    output = pipeline.infer({self._input_name: input_data})
-            raw_detections = list(output.values())[0][0]
-            for det in raw_detections:
-                if len(det) < 6:
-                    continue
-                y1_n, x1_n, y2_n, x2_n, confidence, class_id = det[:6]
-                if int(class_id) != PERSON_CLASS_ID:
-                    continue
-                if confidence < self._confidence_threshold:
-                    continue
-                x1 = int(x1_n * frame_w)
-                y1 = int(y1_n * frame_h)
-                x2 = int(x2_n * frame_w)
-                y2 = int(y2_n * frame_h)
-                cx = (x1 + x2) // 2
-                cy = (y1 + y2) // 2
-                results.append({
-                    "bbox": (x1, y1, x2, y2),
-                    "confidence": float(confidence),
-                    "class_id": int(class_id),
-                    "centroid": (cx, cy),
-                })
-        except Exception as exc:
-            logger.error("Hailo inference error: %s", exc)
+        for d in raw:
+            x1 = int(d["xmin_n"] * frame_w)
+            y1 = int(d["ymin_n"] * frame_h)
+            x2 = int(d["xmax_n"] * frame_w)
+            y2 = int(d["ymax_n"] * frame_h)
+            results.append({
+                "bbox": (x1, y1, x2, y2),
+                "confidence": d["confidence"],
+                "class_id": d["class_id"],
+                "centroid": ((x1 + x2) // 2, (y1 + y2) // 2),
+            })
         return results
 
     def _mock_detect(self, frame: np.ndarray) -> List[dict]:
@@ -158,23 +234,25 @@ class HailoDetector:
         return detections
 
     def close(self) -> None:
-        if self._device is not None:
+        if self._pipeline is not None:
             try:
-                self._device.release()
+                self._pipeline.set_state(self._Gst.State.NULL)
             except Exception as exc:
-                logger.warning("Error releasing Hailo device: %s", exc)
+                logger.warning("Error stopping GStreamer pipeline: %s", exc)
+        if self._loop is not None:
+            try:
+                self._loop.quit()
+            except Exception:
+                pass
         logger.info("HailoDetector closed")
 
 
 class MockDetector:
-    """Detects the orange blobs rendered by MockCamera via HSV color thresholding.
-    Used in debug mode so the tracker and line counter see realistic, consistent
-    detections tied to the actual blob positions in the frame."""
+    """Detects orange blobs rendered by MockCamera via HSV color thresholding."""
 
     def detect(self, frame: np.ndarray) -> List[dict]:
         import cv2
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        # BGR (0, 120, 255) is orange: HSV hue ~15°, broad saturation/value range
         mask = cv2.inRange(hsv,
                            np.array([5,  80,  80]),
                            np.array([25, 255, 255]))

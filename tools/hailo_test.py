@@ -2,7 +2,8 @@
 """
 Hailo detection test — viser live kamerabillede med bounding boxes.
 
-Trykker ESC eller Q for at afslutte.
+Bruger GStreamer pipeline via HailoDetector (samme kode som produktion).
+Tryk ESC eller Q for at afslutte.
 
 Usage:
     python tools/hailo_test.py [--config device1/config.yaml]
@@ -19,8 +20,9 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-PERSON_CLASS_ID = 0
-COLOR = (0, 220, 80)   # grøn
+from device1.ai.hailo_detector import HailoDetector
+
+COLOR_PERSON = (0, 220, 80)   # grøn
 
 
 def load_config(path: str) -> dict:
@@ -46,62 +48,16 @@ def build_rtsp_url(cam_cfg: dict) -> str:
     return url
 
 
-def init_hailo(model_path: str, confidence: float):
-    try:
-        from hailo_platform import (
-            HEF, VDevice, HailoStreamInterface,
-            InferVStreams, ConfigureParams,
-            InputVStreamParams, OutputVStreamParams, FormatType,
-        )
-    except ImportError:
-        print("FEJL: hailo_platform ikke tilgængeligt")
-        sys.exit(1)
-
-    print(f"Indlæser model: {model_path}")
-    hef    = HEF(model_path)
-    device = VDevice()
-    params = ConfigureParams.create_from_hef(hef, interface=HailoStreamInterface.PCIe)
-    ng     = device.configure(hef, params)[0]
-
-    # UINT8 (0-255) — samme format som GStreamer-pipelinen bruger
-    in_params  = InputVStreamParams.make_from_network_group(ng, quantized=False, format_type=FormatType.UINT8)
-    out_params = OutputVStreamParams.make_from_network_group(ng, quantized=False, format_type=FormatType.FLOAT32)
-    input_name = list(in_params.keys())[0]
-    print(f"Hailo klar — input stream: {input_name}")
-
-    return device, ng, in_params, out_params, input_name, confidence
-
-
-def preprocess(frame: np.ndarray, w: int, h: int) -> np.ndarray:
-    resized = cv2.resize(frame, (w, h))
-    rgb     = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-    return np.expand_dims(rgb.astype(np.uint8), axis=0)  # 0-255, ikke normaliseret
-
-
-def infer(ng, in_params, out_params, input_name: str, data: np.ndarray):
-    from hailo_platform import InferVStreams
-    with ng.activate():
-        with InferVStreams(ng, in_params, out_params) as pipeline:
-            output = pipeline.infer({input_name: data})
-    return list(output.values())[0][0]
-
-
-def draw_boxes(frame: np.ndarray, detections: list, confidence: float) -> np.ndarray:
+def draw_detections(frame: np.ndarray, detections: list) -> np.ndarray:
     out = frame.copy()
-    fh, fw = out.shape[:2]
-    count = 0
     for det in detections:
-        if len(det) < 6:
-            continue
-        y1n, x1n, y2n, x2n, conf, cls = det[:6]
-        if int(cls) != PERSON_CLASS_ID or conf < confidence:
-            continue
-        x1, y1 = int(x1n * fw), int(y1n * fh)
-        x2, y2 = int(x2n * fw), int(y2n * fh)
-        cv2.rectangle(out, (x1, y1), (x2, y2), COLOR, 2)
+        x1, y1, x2, y2 = det["bbox"]
+        conf = det["confidence"]
+        cv2.rectangle(out, (x1, y1), (x2, y2), COLOR_PERSON, 2)
         cv2.putText(out, f"person {conf:.2f}", (x1, max(y1 - 6, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR, 2)
-        count += 1
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_PERSON, 2)
+
+    count = len(detections)
     cv2.putText(out, f"Detektioner: {count}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
     cv2.putText(out, f"Detektioner: {count}", (10, 30),
@@ -123,13 +79,24 @@ def main():
     input_w    = ai_cfg.get("input_width",  640)
     input_h    = ai_cfg.get("input_height", 640)
 
-    device, ng, in_params, out_params, input_name, confidence = \
-        init_hailo(model_path, confidence)
+    print(f"Indlæser model: {model_path}")
+    detector = HailoDetector(
+        model_path=model_path,
+        confidence_threshold=confidence,
+        input_width=input_w,
+        input_height=input_h,
+    )
+    if detector._mock_mode:
+        print("ADVARSEL: Hailo/GStreamer ikke tilgængeligt — kører i mock-tilstand")
+        print("  Tjek at hailo-all og hailo-tappas-core er installeret")
+    else:
+        print("Hailo GStreamer pipeline klar")
 
     print(f"Åbner kamera: {rtsp_url}")
     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
     if not cap.isOpened():
         print("FEJL: Kunne ikke åbne RTSP-stream")
+        detector.close()
         sys.exit(1)
     print("Kamera forbundet. Tryk ESC eller Q for at afslutte.")
 
@@ -149,28 +116,16 @@ def main():
             cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
             continue
 
-        data = preprocess(frame, input_w, input_h)
-        try:
-            raw = infer(ng, in_params, out_params, input_name, data)
-            # Debug: print shape and first non-zero detections on first frame
-            if fps_cnt == 0:
-                print(f"[DEBUG] output shape: {np.array(raw).shape}")
-                nonzero = [d for d in raw if len(d) >= 5 and d[4] > 0.01]
-                print(f"[DEBUG] detektioner med conf>0.01: {len(nonzero)}")
-                if nonzero:
-                    print(f"[DEBUG] første detektion: {nonzero[0]}")
-            display = draw_boxes(frame, raw, confidence)
-        except Exception as exc:
-            print(f"Inference fejl: {exc}")
-            display = frame.copy()
+        detections = detector.detect(frame)
+        display = draw_detections(frame, detections)
 
-        # FPS overlay
         fps_cnt += 1
         elapsed = time.time() - fps_t
         if elapsed >= 1.0:
             fps = fps_cnt / elapsed
             fps_cnt = 0
             fps_t = time.time()
+
         fh, fw = display.shape[:2]
         cv2.putText(display, f"{fps:.1f} fps", (fw - 110, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
@@ -182,7 +137,7 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
-    device.release()
+    detector.close()
     print("Afsluttet.")
 
 
