@@ -9,7 +9,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-PERSON_CLASS_ID = 0
+PERSON_CLASS_ID = 0   # kept for MockDetector compatibility
+_PERSON_LABEL = "person"  # yolov8s_h8l uses class_id=1, label="person"
 
 # Hailo YOLO post-processing library locations.
 # tappas 5.x: libyolo_hailortpp_post.so (note _post suffix, new path)
@@ -167,7 +168,7 @@ class HailoDetector:
             roi = self._hailo_mod.get_roi_from_buffer(buf)
             dets = []
             for obj in roi.get_objects_typed(self._hailo_mod.HAILO_DETECTION):
-                if obj.get_class_id() != PERSON_CLASS_ID:
+                if obj.get_label().lower() != _PERSON_LABEL:
                     continue
                 conf = obj.get_confidence()
                 if conf < self._confidence_threshold:
