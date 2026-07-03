@@ -28,10 +28,9 @@ def _find_postproc_lib() -> Optional[str]:
     for path in _POSTPROC_CANDIDATES:
         if os.path.exists(path):
             return path
-    # Fallback: recursive search
     found = (
-        glob.glob("/usr/**/libyolo_hailortpp.so", recursive=True)
-        + glob.glob("/opt/**/libyolo_hailortpp.so", recursive=True)
+        glob.glob("/usr/**/libyolo_hailortpp*.so", recursive=True)
+        + glob.glob("/opt/**/libyolo_hailortpp*.so", recursive=True)
     )
     return found[0] if found else None
 
@@ -40,9 +39,10 @@ class HailoDetector:
     """
     Person detector using Hailo-8L via GStreamer pipeline.
 
-    Pipeline: appsrc (BGR frames) → videoconvert (RGB) → hailonet → hailofilter
-              (YOLO post-processing) → appsink (ROI callbacks)
+    Pipeline: appsrc (BGR) → videoconvert (RGB) → hailonet → hailofilter → appsink
 
+    Uses synchronous pull mode on appsink: push-buffer blocks, then
+    try-pull-sample waits for the inference result for that exact frame.
     Falls back to mock mode if GStreamer/Hailo is not available.
     """
 
@@ -59,10 +59,9 @@ class HailoDetector:
         self._input_height = input_height
         self._mock_mode = False
 
-        self._latest_detections: List[dict] = []
-        self._lock = threading.Lock()
         self._pipeline = None
         self._appsrc = None
+        self._appsink = None
         self._Gst = None
         self._pts = 0
         self._hailo_mod = None
@@ -103,7 +102,7 @@ class HailoDetector:
             f"videoconvert ! video/x-raw,format=RGB ! "
             f"hailonet hef-path={self._model_path} ! "
             f'hailofilter so-path="{postproc}" function-name=yolov8s qos=false ! '
-            f"appsink name=sink emit-signals=true drop=true max-buffers=1"
+            f"appsink name=sink sync=false drop=false max-buffers=1"
         )
 
         try:
@@ -115,25 +114,24 @@ class HailoDetector:
         appsrc = pipeline.get_by_name("src")
         appsink = pipeline.get_by_name("sink")
         if appsrc is None or appsink is None:
-            logger.warning("Could not get appsrc/appsink elements from pipeline")
+            logger.warning("Could not get appsrc/appsink from pipeline")
             return False
 
-        # new-sample is emitted from GStreamer's internal streaming thread — no GLib
-        # main loop needed. Avoid GLib.MainLoop entirely so we don't conflict with
-        # OpenCV's GTK backend when both run in the same process.
-        appsink.connect("new-sample", self._on_new_sample)
+        # Pull mode: we call try-pull-sample() after each push-buffer, no callbacks.
+        # This avoids the one-frame offset that signal mode introduces.
+        appsink.set_property("emit-signals", False)
 
         ret = pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
-            logger.warning("GStreamer pipeline failed to transition to PLAYING")
+            logger.warning("GStreamer pipeline failed to start")
             pipeline.set_state(Gst.State.NULL)
             return False
 
         self._pipeline = pipeline
         self._appsrc = appsrc
+        self._appsink = appsink
         self._Gst = Gst
 
-        # Poll bus for errors in a lightweight daemon thread (no GLib main loop)
         self._bus_running = True
         bus = pipeline.get_bus()
         self._bus_thread = threading.Thread(
@@ -141,7 +139,7 @@ class HailoDetector:
         )
         self._bus_thread.start()
 
-        logger.info("HailoDetector ready (GStreamer, model=%s)", self._model_path)
+        logger.info("HailoDetector ready (GStreamer pull mode, model=%s)", self._model_path)
         return True
 
     def _bus_watcher(self, bus, Gst) -> None:
@@ -157,37 +155,6 @@ class HailoDetector:
                 logger.error("GStreamer pipeline error: %s — %s", err, debug)
             elif msg.type == Gst.MessageType.EOS:
                 logger.warning("GStreamer pipeline EOS")
-
-    def _on_new_sample(self, sink):
-        sample = sink.emit("pull-sample")
-        if not sample:
-            return self._Gst.FlowReturn.OK
-
-        buf = sample.get_buffer()
-        try:
-            roi = self._hailo_mod.get_roi_from_buffer(buf)
-            dets = []
-            for obj in roi.get_objects_typed(self._hailo_mod.HAILO_DETECTION):
-                if obj.get_label().lower() != _PERSON_LABEL:
-                    continue
-                conf = obj.get_confidence()
-                if conf < self._confidence_threshold:
-                    continue
-                bbox = obj.get_bbox()
-                dets.append({
-                    "xmin_n": float(bbox.xmin()),
-                    "ymin_n": float(bbox.ymin()),
-                    "xmax_n": float(bbox.xmin() + bbox.width()),
-                    "ymax_n": float(bbox.ymin() + bbox.height()),
-                    "confidence": float(conf),
-                    "class_id": int(obj.get_class_id()),
-                })
-            with self._lock:
-                self._latest_detections = dets
-        except Exception as exc:
-            logger.debug("Detection callback error: %s", exc)
-
-        return self._Gst.FlowReturn.OK
 
     def detect(self, frame: np.ndarray) -> List[dict]:
         if self._mock_mode:
@@ -213,21 +180,37 @@ class HailoDetector:
             logger.warning("push-buffer returned: %s", ret)
             return []
 
-        with self._lock:
-            raw = list(self._latest_detections)
+        # Wait synchronously for the inference result for this exact frame (2s timeout)
+        sample = self._appsink.emit("try-pull-sample", 2 * self._Gst.SECOND)
+        if sample is None:
+            logger.warning("Timeout waiting for Hailo inference result")
+            return []
 
+        return self._extract_detections(sample.get_buffer(), frame_w, frame_h)
+
+    def _extract_detections(self, buf, frame_w: int, frame_h: int) -> List[dict]:
         results = []
-        for d in raw:
-            x1 = int(d["xmin_n"] * frame_w)
-            y1 = int(d["ymin_n"] * frame_h)
-            x2 = int(d["xmax_n"] * frame_w)
-            y2 = int(d["ymax_n"] * frame_h)
-            results.append({
-                "bbox": (x1, y1, x2, y2),
-                "confidence": d["confidence"],
-                "class_id": d["class_id"],
-                "centroid": ((x1 + x2) // 2, (y1 + y2) // 2),
-            })
+        try:
+            roi = self._hailo_mod.get_roi_from_buffer(buf)
+            for obj in roi.get_objects_typed(self._hailo_mod.HAILO_DETECTION):
+                if obj.get_label().lower() != _PERSON_LABEL:
+                    continue
+                conf = obj.get_confidence()
+                if conf < self._confidence_threshold:
+                    continue
+                bbox = obj.get_bbox()
+                x1 = int(bbox.xmin() * frame_w)
+                y1 = int(bbox.ymin() * frame_h)
+                x2 = int((bbox.xmin() + bbox.width()) * frame_w)
+                y2 = int((bbox.ymin() + bbox.height()) * frame_h)
+                results.append({
+                    "bbox": (x1, y1, x2, y2),
+                    "confidence": float(conf),
+                    "class_id": int(obj.get_class_id()),
+                    "centroid": ((x1 + x2) // 2, (y1 + y2) // 2),
+                })
+        except Exception as exc:
+            logger.debug("Detection extraction error: %s", exc)
         return results
 
     def _mock_detect(self, frame: np.ndarray) -> List[dict]:
