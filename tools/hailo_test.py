@@ -63,7 +63,8 @@ def init_hailo(model_path: str, confidence: float):
     params = ConfigureParams.create_from_hef(hef, interface=HailoStreamInterface.PCIe)
     ng     = device.configure(hef, params)[0]
 
-    in_params  = InputVStreamParams.make_from_network_group(ng, quantized=False, format_type=FormatType.FLOAT32)
+    # UINT8 (0-255) — samme format som GStreamer-pipelinen bruger
+    in_params  = InputVStreamParams.make_from_network_group(ng, quantized=False, format_type=FormatType.UINT8)
     out_params = OutputVStreamParams.make_from_network_group(ng, quantized=False, format_type=FormatType.FLOAT32)
     input_name = list(in_params.keys())[0]
     print(f"Hailo klar — input stream: {input_name}")
@@ -74,7 +75,7 @@ def init_hailo(model_path: str, confidence: float):
 def preprocess(frame: np.ndarray, w: int, h: int) -> np.ndarray:
     resized = cv2.resize(frame, (w, h))
     rgb     = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-    return np.expand_dims(rgb.astype(np.float32) / 255.0, axis=0)
+    return np.expand_dims(rgb.astype(np.uint8), axis=0)  # 0-255, ikke normaliseret
 
 
 def infer(ng, in_params, out_params, input_name: str, data: np.ndarray):
