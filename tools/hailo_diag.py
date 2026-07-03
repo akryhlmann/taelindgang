@@ -46,6 +46,8 @@ def build_rtsp_url(cam_cfg):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="device1/config.yaml")
+    parser.add_argument("--video", default=None,
+                        help="Path to video file (default: use RTSP from config)")
     parser.add_argument("--frames", type=int, default=10,
                         help="Number of frames to push through pipeline")
     args = parser.parse_args()
@@ -159,21 +161,23 @@ def main():
     pipeline.get_state(5 * Gst.SECOND)
     print("Pipeline klar\n")
 
-    # ---- Grab frames from camera ----
-    print(f"Henter ramme fra kamera: {rtsp_url}")
-    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    # ---- Grab frames from video or camera ----
+    source = args.video if args.video else rtsp_url
+    print(f"Kilde: {source}")
+    cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        print("FEJL: Kunne ikke åbne RTSP stream")
+        print(f"FEJL: Kunne ikke åbne {source}")
         sys.exit(1)
 
-    # Discard a few frames to let camera stabilise
-    for _ in range(5):
-        cap.read()
+    if not args.video:
+        # Discard a few frames to let camera stabilise
+        for _ in range(5):
+            cap.read()
 
     ret_f, frame = cap.read()
     cap.release()
     if not ret_f:
-        print("FEJL: Kunne ikke læse ramme fra kamera")
+        print("FEJL: Kunne ikke læse ramme")
         sys.exit(1)
 
     print(f"Ramme hentet: {frame.shape[1]}x{frame.shape[0]}")

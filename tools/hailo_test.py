@@ -68,6 +68,8 @@ def draw_detections(frame: np.ndarray, detections: list) -> np.ndarray:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="device1/config.yaml")
+    parser.add_argument("--video", default=None,
+                        help="Path to video file instead of RTSP stream")
     args = parser.parse_args()
 
     cfg        = load_config(args.config)
@@ -97,13 +99,14 @@ def main():
     else:
         print("Hailo GStreamer pipeline klar")
 
-    print(f"Åbner kamera: {rtsp_url}")
-    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    source = args.video if args.video else rtsp_url
+    print(f"Åbner kilde: {source}")
+    cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        print("FEJL: Kunne ikke åbne RTSP-stream")
+        print(f"FEJL: Kunne ikke åbne {source}")
         detector.close()
         sys.exit(1)
-    print("Kamera forbundet. Tryk ESC eller Q for at afslutte.")
+    print("Forbundet. Tryk ESC eller Q for at afslutte.")
 
     fps_t   = time.time()
     fps_cnt = 0
@@ -112,6 +115,10 @@ def main():
     while True:
         ret, frame = cap.read()
         if not ret:
+            if args.video:
+                # Loop video file
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
             print("Forbindelsen mistet — genforbinder...")
             cap.release()
             time.sleep(2)
