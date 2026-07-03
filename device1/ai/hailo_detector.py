@@ -68,7 +68,6 @@ class HailoDetector:
             )
             network_groups = self._device.configure(hef, configure_params)
             self._network_group = network_groups[0]
-            network_group_params = self._network_group.create_params()
 
             input_vstreams_params = self._hailo["InputVStreamParams"].make_from_network_group(
                 self._network_group,
@@ -80,10 +79,11 @@ class HailoDetector:
                 quantized=False,
                 format_type=self._hailo["FormatType"].FLOAT32,
             )
+            # Store input stream name — keys of InputVStreamParams dict (HailoRT 4.x)
+            self._input_name = list(input_vstreams_params.keys())[0]
+            self._input_vstreams_params = input_vstreams_params
+            self._output_vstreams_params = output_vstreams_params
 
-            self._infer_pipeline = self._hailo["InferVStreams"](
-                self._network_group, input_vstreams_params, output_vstreams_params
-            )
             logger.info("HailoDetector initialized with model: %s", self._model_path)
         except Exception as exc:
             logger.error("Failed to initialize Hailo device: %s — switching to mock mode", exc)
@@ -107,7 +107,12 @@ class HailoDetector:
         results = []
         try:
             with self._network_group.activate():
-                output = self._infer_pipeline.infer({list(self._infer_pipeline.get_input_vstreams())[0].name: input_data})
+                with self._hailo["InferVStreams"](
+                    self._network_group,
+                    self._input_vstreams_params,
+                    self._output_vstreams_params,
+                ) as pipeline:
+                    output = pipeline.infer({self._input_name: input_data})
             raw_detections = list(output.values())[0][0]
             for det in raw_detections:
                 if len(det) < 6:
