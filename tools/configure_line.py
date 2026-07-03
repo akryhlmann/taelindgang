@@ -107,7 +107,13 @@ def main() -> None:
         sys.exit(1)
 
     cfg = load_config(config_path)
-    rtsp_url = cfg["camera"]["rtsp_url"]
+    cam_cfg = cfg["camera"]
+    rtsp_url = cam_cfg["rtsp_url"]
+    username = cam_cfg.get("username", "")
+    password = cam_cfg.get("password", "")
+    if username and "@" not in rtsp_url:
+        proto, rest = rtsp_url.split("://", 1)
+        rtsp_url = f"{proto}://{username}:{password}@{rest}"
     counting_cfg = cfg["counting"]["line"]
 
     in_direction = counting_cfg.get("in_direction", "top")
