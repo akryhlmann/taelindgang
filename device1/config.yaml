@@ -53,6 +53,17 @@ lora:
   bandwidth: 125000
   send_interval: 300
 
+setup_mode:
+  enabled: true
+  gpio_button_pin: 26      # BCM pin connected to momentary button (GND when pressed)
+  gpio_chip: 4             # gpiochip4 = 40-pin header on RPi5; use 0 for RPi4
+  hold_seconds: 3.0        # seconds to hold button for long-press activation
+  timeout_seconds: 1200    # auto-shutdown after 20 min of web-UI inactivity
+  hotspot_ssid: "BornelandSetup"
+  hotspot_password: "borneland1"
+  hotspot_ip: "10.42.0.1"
+  flask_port: 8080
+
 debug:
   mock_camera: false
   person_interval: 15.0

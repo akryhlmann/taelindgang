@@ -5,3 +5,5 @@ spidev>=3.6
 lgpio>=0.2.2.0
 # hailo_platform — installed via: sudo apt install hailo-all (not pip)
 scipy>=1.11.0
+flask>=3.0.0
+werkzeug>=3.0.0

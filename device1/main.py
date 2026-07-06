@@ -20,6 +20,8 @@ from device1.counter.tracker import CentroidTracker
 from device1.counter.line_counter import LineCounter
 from device1.storage.local_storage import LocalStorage
 from device1.lora.transmitter import LoRaTransmitter
+from device1.setup_mode.shared_state import SharedState
+from device1.setup_mode.coordinator import SetupModeCoordinator
 
 
 def _setup_logging(cfg: dict) -> None:
@@ -68,6 +70,24 @@ def _event_window(schedule: dict) -> tuple:
     return open_dt, close_dt
 
 
+def _persist_line_config(cfg: dict, line_update: dict) -> None:
+    """Write updated line config back to config.yaml so it survives restarts."""
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+        with open(config_path, "r") as f:
+            raw = yaml.safe_load(f)
+        raw.setdefault("counting", {}).setdefault("line", {})
+        raw["counting"]["line"].update({
+            "point1":       line_update["point1"],
+            "point2":       line_update["point2"],
+            "in_direction": line_update["in_direction"],
+        })
+        with open(config_path, "w") as f:
+            yaml.dump(raw, f, allow_unicode=True, default_flow_style=False)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Could not persist line config: %s", exc)
+
+
 def _is_event_active(schedule: dict) -> bool:
     open_dt, close_dt = _event_window(schedule)
     if open_dt is None:
@@ -87,6 +107,8 @@ class Device1:
         self._line_counter: Optional[LineCounter] = None
         self._storage: Optional[LocalStorage] = None
         self._lora: Optional[LoRaTransmitter] = None
+        self._shared_state = SharedState()
+        self._setup_coordinator: Optional[SetupModeCoordinator] = None
 
     def _init_components(self) -> None:
         cfg = self._cfg
@@ -150,6 +172,11 @@ class Device1:
         if not self._lora.initialize():
             self._logger.error("LoRa initialization failed")
 
+        setup_cfg = cfg.get("setup_mode", {})
+        if setup_cfg.get("enabled", True):
+            self._setup_coordinator = SetupModeCoordinator(setup_cfg, self._shared_state)
+            self._setup_coordinator.start()
+
     def _send_lora_update(self, device_id: str, count_in: int, count_out: int) -> None:
         try:
             payload = encode_message(
@@ -162,6 +189,7 @@ class Device1:
             success = self._lora.send(payload)
             if success:
                 self._logger.info("LoRa update sent: in=%d out=%d", count_in, count_out)
+                self._shared_state.notify_lora_sent()
             else:
                 self._logger.warning("LoRa send failed")
         except Exception as exc:
@@ -218,8 +246,32 @@ class Device1:
                 frame_dims_known = True
                 self._logger.info("Frame dimensions detected: %dx%d", w, h)
 
+            # Apply any line config update from the web UI
+            line_update = self._shared_state.consume_line_update()
+            if line_update is not None:
+                line_counter = LineCounter(
+                    point1=line_update["point1"],
+                    point2=line_update["point2"],
+                    in_direction=line_update["in_direction"],
+                    frame_width=frame.shape[1],
+                    frame_height=frame.shape[0],
+                )
+                self._line_counter = line_counter
+                self._line_cfg = line_update
+                _persist_line_config(self._cfg, line_update)
+                self._logger.info(
+                    "Line config updated from web UI: %s", line_update
+                )
+
             detections = self._detector.detect(frame)
             tracks = self._tracker.update(detections)
+
+            # Feed SharedState for setup mode MJPEG stream
+            self._shared_state.update_frame(
+                frame, detections,
+                camera_ok=self._camera.is_connected(),
+                line_cfg=self._line_cfg,
+            )
 
             new_ins, new_outs = line_counter.process_tracks(tracks, prev_tracks)
             if new_ins > 0 or new_outs > 0:
@@ -261,6 +313,8 @@ class Device1:
 
     def _shutdown(self) -> None:
         self._logger.info("Shutting down Device1")
+        if self._setup_coordinator:
+            self._setup_coordinator.stop()
         if self._camera:
             self._camera.stop()
         if self._detector:
