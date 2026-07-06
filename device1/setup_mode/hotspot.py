@@ -5,10 +5,14 @@ Uses NetworkManager (nmcli) to create an access point, then:
   - Writes a dnsmasq snippet to capture all DNS → hotspot IP (captive portal)
   - Adds an iptables REDIRECT rule: port 80 → 8080 (where Flask runs)
 
-Requires: NetworkManager ≥ 1.20, iptables
+Privileged operations (nmcli hotspot, iptables, writing to /etc/NetworkManager/)
+are run via `sudo` so the service does not need to run as root. Install the
+sudoers snippet from setup/sudoers-visitor-counter to grant passwordless sudo
+for exactly these commands.
 """
 import logging
 import os
+import shutil
 import subprocess
 import time
 
@@ -21,14 +25,21 @@ _FLASK_PORT = 8080
 _DNSMASQ_CONF = "/etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf"
 _IPTABLES_COMMENT = "borneland-setup"
 
+# iptables lives in /sbin on Debian/RPi OS — not always in PATH for services
+_IPTABLES = (
+    shutil.which("iptables")
+    or shutil.which("iptables", path="/sbin:/usr/sbin:/usr/bin:/bin")
+    or "/sbin/iptables"
+)
 
-def _run(cmd: list, check: bool = True) -> subprocess.CompletedProcess:
+
+def _run(cmd: list, check: bool = True, input: bytes = None) -> subprocess.CompletedProcess:
     logger.debug("run: %s", " ".join(str(c) for c in cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, input=input)
     if check and result.returncode != 0:
         raise RuntimeError(
             f"Command failed ({result.returncode}): {' '.join(str(c) for c in cmd)}\n"
-            f"stderr: {result.stderr.strip()}"
+            f"stderr: {result.stderr.decode(errors='replace').strip()}"
         )
     return result
 
@@ -55,29 +66,28 @@ def stop() -> None:
 
 def _write_dnsmasq_conf() -> None:
     """Tell NetworkManager's embedded dnsmasq to send all DNS queries to our IP."""
-    os.makedirs(os.path.dirname(_DNSMASQ_CONF), exist_ok=True)
-    with open(_DNSMASQ_CONF, "w") as f:
-        f.write(f"address=/#/{HOTSPOT_IP}\n")
+    content = f"address=/#/{HOTSPOT_IP}\n".encode()
+    # mkdir -p via sudo (directory may be owned by root)
+    _run(["sudo", "mkdir", "-p", os.path.dirname(_DNSMASQ_CONF)])
+    # Write via sudo tee (avoids needing write permission directly)
+    _run(["sudo", "tee", _DNSMASQ_CONF], input=content)
     logger.debug("Wrote %s", _DNSMASQ_CONF)
 
 
 def _remove_dnsmasq_conf() -> None:
-    try:
-        os.remove(_DNSMASQ_CONF)
-        logger.debug("Removed %s", _DNSMASQ_CONF)
-    except FileNotFoundError:
-        pass
+    _run(["sudo", "rm", "-f", _DNSMASQ_CONF], check=False)
+    logger.debug("Removed %s", _DNSMASQ_CONF)
 
 
 def _delete_connection() -> None:
-    result = _run(["nmcli", "connection", "show", _CONN_NAME], check=False)
+    result = _run(["sudo", "nmcli", "connection", "show", _CONN_NAME], check=False)
     if result.returncode == 0:
-        _run(["nmcli", "connection", "delete", _CONN_NAME], check=False)
+        _run(["sudo", "nmcli", "connection", "delete", _CONN_NAME], check=False)
 
 
 def _create_hotspot(ssid: str, password: str) -> None:
     _run([
-        "nmcli", "device", "wifi", "hotspot",
+        "sudo", "nmcli", "device", "wifi", "hotspot",
         "ifname", _IFACE,
         "ssid", ssid,
         "password", password,
@@ -87,7 +97,7 @@ def _create_hotspot(ssid: str, password: str) -> None:
 
 def _iptables_add() -> None:
     _run([
-        "iptables", "-t", "nat", "-A", "PREROUTING",
+        "sudo", _IPTABLES, "-t", "nat", "-A", "PREROUTING",
         "-i", _IFACE, "-p", "tcp", "--dport", "80",
         "-j", "REDIRECT", "--to-port", str(_FLASK_PORT),
         "-m", "comment", "--comment", _IPTABLES_COMMENT,
@@ -96,7 +106,7 @@ def _iptables_add() -> None:
 
 def _iptables_remove() -> None:
     _run([
-        "iptables", "-t", "nat", "-D", "PREROUTING",
+        "sudo", _IPTABLES, "-t", "nat", "-D", "PREROUTING",
         "-i", _IFACE, "-p", "tcp", "--dport", "80",
         "-j", "REDIRECT", "--to-port", str(_FLASK_PORT),
         "-m", "comment", "--comment", _IPTABLES_COMMENT,

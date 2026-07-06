@@ -1,0 +1,17 @@
+# Passwordless sudo for visitor-counter setup mode
+#
+# Install with:
+#   sudo cp setup/sudoers-visitor-counter /etc/sudoers.d/visitor-counter
+#   sudo chmod 440 /etc/sudoers.d/visitor-counter
+#
+# Replace 'pi' with the user that runs the visitor-counter service
+# (check with: systemctl show -p User visitor-counter-device1)
+
+pi ALL=(ALL) NOPASSWD: \
+    /usr/bin/nmcli, \
+    /sbin/iptables, \
+    /usr/sbin/iptables, \
+    /usr/bin/tee /etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf, \
+    /bin/mkdir -p /etc/NetworkManager/dnsmasq-shared.d, \
+    /usr/bin/mkdir -p /etc/NetworkManager/dnsmasq-shared.d, \
+    /bin/rm -f /etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf
