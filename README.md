@@ -17,7 +17,7 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 │  • Setup-tilstand (WiFi hotspot)│
 │  • Lokal SQLite + CSV           │
 └──────────────┬──────────────────┘
-               │ LoRa 868 MHz (SX1272)
+               │ LoRa 868 MHz (SX1276)
                │ hvert 5. minut
                ▼
 ┌─────────────────────────────────┐
@@ -50,7 +50,7 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 | Raspberry Pi | 5 |
 | AI-accelerator | Hailo 8L (M.2 HAT) |
 | Kamera | IP-kamera med RTSP-stream (Ethernet) |
-| LoRa modul | SX1272 868 MHz bare module |
+| LoRa modul | SX1276 868 MHz bare module |
 | Setup-knap | Momentary push-button (GPIO26 → GND) |
 | Setup-LED | LED + 330 Ω modstand (GPIO24 → LED → modstand → GND) |
 
@@ -58,15 +58,15 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 | Komponent | Specifikation |
 |-----------|--------------|
 | Raspberry Pi | 5 |
-| LoRa modul | SX1272 868 MHz bare module |
+| LoRa modul | SX1276 868 MHz bare module |
 | Netværk | LAN/WiFi til Google Sheets og dashboard-adgang |
 
-### SX1272 LoRa modul → Raspberry Pi GPIO
+### SX1276 LoRa modul → Raspberry Pi GPIO
 
 Modulet tilsluttes via SPI0. Aktivér **SPI0** inden brug:
 `sudo raspi-config` → Interface Options → SPI → Enable
 
-| SX1272 signal | RPi BCM | Fysisk pin | Funktion |
+| SX1276 signal | RPi BCM | Fysisk pin | Funktion |
 |---------------|---------|-----------|----------|
 | VCC | 3.3V | Pin 1 | Strøm |
 | GND | GND | Pin 6 | Stel |
@@ -79,7 +79,7 @@ Modulet tilsluttes via SPI0. Aktivér **SPI0** inden brug:
 
 > **Polling-tilstand:** Driveren aflæser IRQ-flaget direkte via SPI i stedet for at bruge DIO0-interrupt. DIO0 behøver derfor ikke forbindes, men kan bruges til fremtidig interrupt-baseret RX.
 
-> **Spændingsniveau:** SX1272 arbejder på 3.3V. Brug **ikke** 5V — det beskadiger modulet.
+> **Spændingsniveau:** SX1276 arbejder på 3.3V. Brug **ikke** 5V — det beskadiger modulet.
 
 ### Setup-knap og LED (Enhed 1)
 
@@ -110,7 +110,7 @@ taelindgang/
 │   │   ├── tracker.py           # Centroid-baseret person-tracker
 │   │   └── line_counter.py      # Linje-krydsnings logik
 │   ├── storage/local_storage.py # SQLite + CSV
-│   ├── lora/transmitter.py      # SX1272/SX1276 SPI driver (TX)
+│   ├── lora/transmitter.py      # SX1276 SPI driver (TX)
 │   └── setup_mode/              # WiFi hotspot + web-konfigurationsinterface
 │       ├── shared_state.py      # Trådsikker bro mellem hoved-loop og web app
 │       ├── hotspot.py           # nmcli hotspot + iptables + dnsmasq (captive portal)
@@ -119,7 +119,7 @@ taelindgang/
 ├── device2/                     # Modtager + dashboard
 │   ├── config.yaml
 │   ├── main.py
-│   ├── lora/receiver.py         # SX1272/SX1276 SPI driver (RX)
+│   ├── lora/receiver.py         # SX1276 SPI driver (RX)
 │   ├── storage/local_storage.py # SQLite med per-enhed historik
 │   ├── sync/google_sheets.py    # Google Sheets via service account
 │   └── dashboard/app.py         # Plotly Dash dashboard
@@ -127,7 +127,7 @@ taelindgang/
 │   ├── configure_line.py        # Visuelt tællelinje-konfigurationsværktøj (desktop)
 │   ├── hailo_test.py            # Live kamera + Hailo detektion med bounding boxes
 │   ├── hailo_diag.py            # Dyb GStreamer/Hailo pipeline-diagnostik
-│   └── lora_diagnostic.py       # SX1272 hardware-diagnostik
+│   └── lora_diagnostic.py       # SX1276 hardware-diagnostik
 ├── setup/
 │   ├── install_device1.sh       # Installer + systemd service (enhed 1)
 │   └── install_device2.sh       # Installer + systemd service (enhed 2)
@@ -453,7 +453,7 @@ Pakkeformat (20 bytes total):
 | Spreading Factor | 7 |
 | Båndbredde | 125 kHz |
 | Sync word | 0x12 (privat netværk) |
-| Chip | SX1272 |
+| Chip | SX1276 |
 | Max payload | 255 bytes |
 
 ## LoRa diagnostik
@@ -466,7 +466,6 @@ sudo python3 tools/lora_diagnostic.py
 
 Scriptet tester SPI-kommunikation, chip-initialisering og sender en testpakke. Output viser `[PASS]`/`[FAIL]` for hvert trin og rapporterer chip-fejlkoder hvis noget går galt.
 
-> **SX1272 vs SX1276:** Driveren er skrevet til SX1276 (version register `0x12`). SX1272 returnerer `0x22` fra version-registeret og bruger forskellig båndbredde-encoding. Hvis du ser fejlen `SX1276 version check failed: got 0x22`, er driveren nødt til at opdateres til SX1272-registerkortet. Kontakt projektet hvis dette er tilfældet.
 
 ## Fejlfinding
 
