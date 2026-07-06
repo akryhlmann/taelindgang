@@ -2,17 +2,21 @@
 Flask web app for setup mode.
 
 Endpoints:
-  GET  /          → setup UI (MJPEG stream + click-to-set line configurator + status)
-  GET  /stream    → MJPEG multipart stream
-  GET  /api/status → JSON status snapshot
-  POST /api/line  → save new line config {point1, point2, in_direction}
+  GET  /                   → setup UI (MJPEG + line configurator + status)
+  GET  /stream             → MJPEG multipart stream
+  GET  /api/status         → JSON status snapshot
+  POST /api/line           → save new line config {point1, point2, in_direction}
+  GET  /api/camera-setup   → SSE stream: runs configure_camera_network.sh live
 
 Runs on 0.0.0.0:8080 (configurable) and is accessible from any device on
 the same network as the Raspberry Pi.
 """
 import io
 import logging
+import os
+import subprocess
 import time
+from pathlib import Path
 from typing import Optional
 
 import cv2
@@ -84,6 +88,39 @@ def create_app(shared_state):
         )
         logger.info("Line update: p1=%s p2=%s dir=%s", p1, p2, direction)
         return jsonify({"ok": True})
+
+    # ── camera network setup (SSE stream) ───────────────────────────────────
+
+    @_app.route("/api/camera-setup")
+    def api_camera_setup():
+        script = Path(__file__).parent.parent.parent / "setup" / "configure_camera_network.sh"
+
+        def generate():
+            if not script.exists():
+                yield f"data: FEJL: scriptet ikke fundet: {script}\n\n"
+                yield "data: __EXIT__1\n\n"
+                return
+            try:
+                proc = subprocess.Popen(
+                    ["sudo", "bash", str(script)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    bufsize=1,
+                    text=True,
+                )
+                for line in proc.stdout:
+                    yield f"data: {line.rstrip()}\n\n"
+                proc.wait()
+                yield f"data: __EXIT__{proc.returncode}\n\n"
+            except Exception as exc:
+                yield f"data: FEJL: {exc}\n\n"
+                yield "data: __EXIT__1\n\n"
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # ── main page ─────────────────────────────────────────────────────────────
 
@@ -319,6 +356,30 @@ _HTML = """<!doctype html>
     color: var(--ok);
   }
 
+  /* camera setup terminal */
+  .btn-cam { background: #1e3a5f; border: 1.5px solid var(--accent); color: var(--accent); margin-bottom: 10px }
+  .btn-cam:not(:disabled):hover { background: #254b7a }
+  .btn-cam:disabled { opacity: .4; cursor: default }
+
+  .terminal {
+    background: #0a0c10;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: #c9d1d9;
+    padding: 10px;
+    max-height: 220px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    display: none;
+  }
+  .terminal.visible { display: block }
+  .terminal .t-ok   { color: var(--ok) }
+  .terminal .t-err  { color: var(--bad) }
+
 </style>
 </head>
 <body>
@@ -393,6 +454,15 @@ _HTML = """<!doctype html>
       <button class="btn btn-reset" onclick="resetPoints()">Nulstil punkter</button>
 
       <div class="feedback" id="feedback"></div>
+    </div>
+
+    <!-- camera network setup -->
+    <div class="card">
+      <h2>Kamera-netværk</h2>
+      <button class="btn btn-cam" id="camSetupBtn" onclick="runCameraSetup()">
+        Konfigurér kamera-netværk
+      </button>
+      <div class="terminal" id="camTerminal"></div>
     </div>
 
   </div><!-- /sidebar -->
@@ -560,6 +630,52 @@ async function pollStatus() {
 
 pollStatus();
 setInterval(pollStatus, 2000);
+
+// ── camera network setup ──────────────────────────────────────────────────────
+let _camSource = null;
+
+function runCameraSetup() {
+  const btn  = document.getElementById("camSetupBtn");
+  const term = document.getElementById("camTerminal");
+
+  if (_camSource) {
+    _camSource.close();
+    _camSource = null;
+  }
+
+  btn.disabled = true;
+  term.classList.add("visible");
+  term.innerHTML = '<span style="color:var(--muted)">Starter kamera-konfiguration…</span>\n';
+  term.scrollTop = 0;
+
+  _camSource = new EventSource("/api/camera-setup");
+
+  _camSource.onmessage = e => {
+    const line = e.data;
+    if (line.startsWith("__EXIT__")) {
+      const code = parseInt(line.replace("__EXIT__", ""), 10);
+      const cls  = code === 0 ? "t-ok" : "t-err";
+      const msg  = code === 0 ? "✓ Færdig (exit 0)" : `✗ Fejlet (exit ${code})`;
+      term.innerHTML += `<span class="${cls}">${msg}</span>\n`;
+      term.scrollTop = term.scrollHeight;
+      _camSource.close();
+      _camSource = null;
+      btn.disabled = false;
+      return;
+    }
+    const safe = line.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    term.innerHTML += safe + "\n";
+    term.scrollTop = term.scrollHeight;
+  };
+
+  _camSource.onerror = () => {
+    term.innerHTML += '<span class="t-err">Forbindelsesfejl</span>\n';
+    term.scrollTop = term.scrollHeight;
+    _camSource.close();
+    _camSource = null;
+    btn.disabled = false;
+  };
+}
 </script>
 </body>
 </html>"""

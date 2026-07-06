@@ -178,7 +178,7 @@ class Device1:
             port = setup_cfg.get("port", 8080)
             from werkzeug.serving import make_server
             flask_app = create_app(self._shared_state)
-            self._setup_server = make_server("0.0.0.0", port, flask_app)
+            self._setup_server = make_server("0.0.0.0", port, flask_app, threaded=True)
             t = threading.Thread(
                 target=self._setup_server.serve_forever,
                 name="setup-web",
