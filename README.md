@@ -34,7 +34,7 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 
 - **AI-baseret tælling** – YOLOv8s person-detektion via Hailo 8L accelerator (GStreamer pipeline)
 - **Ind/ud tælling** – konfigurerbar tællelinje med retningsdetektering
-- **Setup-tilstand** – hold en fysisk knap i 3 sek. for at aktivere et WiFi-hotspot med et webbaseret konfigurationsinterface; LED indikerer aktiv portal
+- **Setup-webinterface** – konfigurér tællelinjen og overvåg detektionen fra enhver browser på samme netværk via `http://<rpi-ip>:8080`
 - **Trådløs dataoverførsel** – LoRa 868 MHz, rækkevidde op til ~2 km fri sigt
 - **Offline-drift** – enhed 1 kræver ingen internetforbindelse under event
 - **Live dashboard** – besøgstal og 15-minutters graf tilgængeligt lokalt på netværket
@@ -51,8 +51,6 @@ System til automatisk tælling af besøgende ved udendørs events. En AI-drevet 
 | AI-accelerator | Hailo 8L (M.2 HAT) |
 | Kamera | IP-kamera med RTSP-stream (Ethernet) |
 | LoRa modul | SX1276 868 MHz bare module |
-| Setup-knap | Momentary push-button (GPIO26 → GND) |
-| Setup-LED | LED + 330 Ω modstand (GPIO24 → LED → modstand → GND) |
 
 ### Enhed 2
 | Komponent | Specifikation |
@@ -80,20 +78,6 @@ Modulet tilsluttes via SPI0. Aktivér **SPI0** inden brug:
 > **Polling-tilstand:** Driveren aflæser IRQ-flaget direkte via SPI i stedet for at bruge DIO0-interrupt. DIO0 behøver derfor ikke forbindes, men kan bruges til fremtidig interrupt-baseret RX.
 
 > **Spændingsniveau:** SX1276 arbejder på 3.3V. Brug **ikke** 5V — det beskadiger modulet.
-
-### Setup-knap og LED (Enhed 1)
-
-```
-GPIO26 ──── [Knap] ──── GND        (aktiv-lav med intern pull-up)
-GPIO24 ──── [LED annode] ──── [330 Ω] ──── GND
-```
-
-| Signal | BCM pin | Fysisk pin |
-|--------|---------|-----------|
-| Knap | GPIO 26 | Pin 37 |
-| LED | GPIO 24 | Pin 18 |
-
-> Brug `gpio_chip: 4` i `config.yaml` for Raspberry Pi 5. Brug `gpio_chip: 0` for RPi 4 og ældre.
 
 ## Projektstruktur
 
@@ -255,12 +239,8 @@ lora:
   send_interval: 300    # Sekunder mellem LoRa-transmissioner (300 = 5 min)
 
 setup_mode:
-  gpio_button_pin: 26   # BCM-pin for setup-knap
-  gpio_led_pin: 24      # BCM-pin for status-LED (null for at deaktivere)
-  gpio_chip: 4          # 4 for RPi5, 0 for RPi4
-  timeout_seconds: 1200 # Auto-luk efter 20 min inaktivitet
-  hotspot_ssid: "BornelandSetup"
-  hotspot_password: "borneland1"
+  enabled: true
+  port: 8080            # Tilgængelig på http://<rpi-ip>:8080
 
 debug:
   mock_camera: false    # Sæt til true for at teste uden kamera og Hailo
@@ -327,45 +307,26 @@ Dashboard er tilgængeligt på: `http://<enhed2-ip>:8050`
 
 ---
 
-## Setup-tilstand
+## Setup-webinterface
 
-Setup-tilstand giver dig mulighed for at konfigurere tællelinjen og overvåge detektionen direkte fra en telefon eller laptop — uden at kameraet eller RPi'en behøver at være forbundet til et netværk.
+Setup-webinterfacet starter automatisk med device1 og er tilgængeligt fra enhver browser på samme netværk som RPi'en.
 
-### Aktivering
+### Adgang
 
-1. **Hold setup-knappen (GPIO26) nede i 3 sekunder**
-2. LED'en (GPIO24) blinker 3 gange hurtigt og lyser derefter konstant
-3. Et WiFi-netværk ved navn **BornelandSetup** (adgangskode: `borneland1`) vises på din enhed
-4. Forbind til netværket — et captive portal-vindue åbner automatisk
+```
+http://<rpi-ip>:8080
+```
 
-### Web-interface
+Find RPi'ens IP-adresse med `hostname -I` på enheden, eller i din routers DHCP-tabel. Et praktisk setup er at forbinde RPi til dit mobiles hotspot — så har du adgang til webinterfacet og til Raspberry Pi Connect på samme tid.
 
-Åbn `http://10.42.0.1` hvis captive portal-vinduet ikke åbner af sig selv.
+### Funktioner
 
 | Funktion | Beskrivelse |
 |----------|-------------|
 | **Live stream** | MJPEG-stream fra kameraet med bounding boxes og tællelinje |
 | **Linje-konfigurator** | Klik to punkter på billedet for at sætte tællelinjen; vælg ind-retning |
 | **Gem linje** | Aktiverer ændringen øjeblikkeligt og gemmer den i `config.yaml` |
-| **Status-panel** | Kamera OK, detektioner/sek, sidst sendt LoRa, nedtælling til auto-luk |
-
-### LED-adfærd
-
-| Signal | Betydning |
-|--------|-----------|
-| 3 korte blink | Portal starter |
-| Konstant lys | Portal er aktiv — hotspot kører |
-| 2 langsomme blink | Portal lukker ned |
-| Slukket | Normal drift |
-
-### Deaktivering
-
-- **Hold knappen i 3 sekunder** igen — LED slukker og hotspot lukkes ned
-- **Automatisk** efter 20 minutters inaktivitet på web-interfacet
-
-### WiFi-note
-
-Når setup-tilstand aktiveres, afbryder RPi'en sin eventuelle WiFi-klientforbindelse (et enkelt WiFi-radio kan ikke være klient og adgangspunkt samtidig). NetworkManager genopretter automatisk forbindelsen når setup-tilstand lukkes ned. LoRa og Ethernet-forbindelsen til kameraet påvirkes ikke.
+| **Status-panel** | Kamera OK, detektioner/sek, sidst sendt LoRa |
 
 ---
 

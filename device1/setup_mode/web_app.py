@@ -2,17 +2,13 @@
 Flask web app for setup mode.
 
 Endpoints:
-  GET  /                    → setup UI (MJPEG + line configurator + status)
-  GET  /stream              → MJPEG multipart stream
-  GET  /api/status          → JSON status snapshot
-  POST /api/line            → save new line config {point1, point2, in_direction}
-  GET  /generate_204        → 204 for Android captive portal detection
-  GET  /hotspot-detect.html → redirect for iOS captive portal detection
-  GET  /ncsi.txt            → redirect for Windows NCSI
-  GET  /favicon.ico         → 204 (silence browser noise)
+  GET  /          → setup UI (MJPEG stream + click-to-set line configurator + status)
+  GET  /stream    → MJPEG multipart stream
+  GET  /api/status → JSON status snapshot
+  POST /api/line  → save new line config {point1, point2, in_direction}
 
-Any request whose Host header doesn't match the hotspot IP is redirected to /
-(this triggers the captive portal browser on mobile clients).
+Runs on 0.0.0.0:8080 (configurable) and is accessible from any device on
+the same network as the Raspberry Pi.
 """
 import io
 import logging
@@ -29,39 +25,13 @@ _app = None
 _state = None  # SharedState instance, set by create_app()
 
 
-def create_app(shared_state, hotspot_ip: str = "10.42.0.1"):
+def create_app(shared_state):
     """Create and return the Flask application."""
     global _app, _state
-    from flask import Flask, Response, jsonify, redirect, render_template_string, request
+    from flask import Flask, Response, jsonify, render_template_string, request
 
     _state = shared_state
     _app = Flask(__name__)
-    _app.config["HOTSPOT_IP"] = hotspot_ip
-
-    # ── captive portal redirect ───────────────────────────────────────────────
-
-    @_app.before_request
-    def _captive_portal_check():
-        """Redirect unknown hostnames so OS captive portal detector fires."""
-        _state.touch()
-        host = request.headers.get("Host", "").split(":")[0]
-        if host not in (hotspot_ip, "localhost", "127.0.0.1"):
-            # Special Android endpoint: must return 204, not redirect
-            if request.path == "/generate_204":
-                return Response(status=204)
-            return redirect(f"http://{hotspot_ip}/", 302)
-
-    # ── static captive-portal probes ────────────────────────────────────────
-
-    @_app.route("/generate_204")
-    def _generate_204():
-        return Response(status=204)
-
-    @_app.route("/hotspot-detect.html")
-    @_app.route("/ncsi.txt")
-    @_app.route("/favicon.ico")
-    def _probe_redirect():
-        return redirect("/", 302)
 
     # ── MJPEG stream ─────────────────────────────────────────────────────────
 
@@ -93,8 +63,6 @@ def create_app(shared_state, hotspot_ip: str = "10.42.0.1"):
     def api_status():
         status = _state.get_status()
         w, h = _state.get_frame_size()
-        timeout_cfg = _app.config.get("TIMEOUT_SECONDS", 1200)
-        status["timeout_remaining"] = _state.timeout_remaining(timeout_cfg)
         status["frame_width"] = w
         status["frame_height"] = h
         return jsonify(status)
@@ -121,8 +89,7 @@ def create_app(shared_state, hotspot_ip: str = "10.42.0.1"):
 
     @_app.route("/")
     def index():
-        ip = hotspot_ip
-        return render_template_string(_HTML, hotspot_ip=ip)
+        return render_template_string(_HTML)
 
     return _app
 
@@ -352,19 +319,6 @@ _HTML = """<!doctype html>
     color: var(--ok);
   }
 
-  /* timeout bar */
-  .timeout-bar-wrap {
-    background: var(--bg);
-    border-radius: 4px;
-    height: 6px;
-    overflow: hidden;
-    margin-top: 8px;
-  }
-  .timeout-bar {
-    height: 100%;
-    background: var(--accent);
-    transition: width .5s linear;
-  }
 </style>
 </head>
 <body>
@@ -401,13 +355,6 @@ _HTML = """<!doctype html>
       <div class="stat-row">
         <span class="label">LoRa sendt</span>
         <span id="loraSent">—</span>
-      </div>
-      <div class="stat-row">
-        <span class="label">Auto-timeout</span>
-        <span id="timeout">—</span>
-      </div>
-      <div class="timeout-bar-wrap">
-        <div class="timeout-bar" id="timeoutBar" style="width:100%"></div>
       </div>
     </div>
 
@@ -455,7 +402,6 @@ _HTML = """<!doctype html>
 const DIR_COLORS = { top:"#00dc50", bottom:"#00c8ff", left:"#ffc800", right:"#c800ff" };
 let pt1 = null, pt2 = null, currentDir = "top";
 let frameW = 640, frameH = 360;
-let maxTimeout = null;
 
 const canvas  = document.getElementById("overlay");
 const ctx     = canvas.getContext("2d");
@@ -586,11 +532,6 @@ async function saveLine() {
 }
 
 // ── status polling ────────────────────────────────────────────────────────────
-function fmtSecs(s) {
-  const m = Math.floor(s / 60), sec = s % 60;
-  return `${m}:${String(sec).padStart(2,"0")}`;
-}
-
 async function pollStatus() {
   try {
     const r = await fetch("/api/status");
@@ -612,14 +553,6 @@ async function pollStatus() {
 
     document.getElementById("loraSent").textContent =
       d.lora_last_sent || "—";
-
-    const rem = d.timeout_remaining ?? 0;
-    document.getElementById("timeout").textContent = fmtSecs(rem);
-    if (maxTimeout === null && rem > 0) maxTimeout = rem;
-    if (maxTimeout) {
-      document.getElementById("timeoutBar").style.width =
-        Math.round(rem / maxTimeout * 100) + "%";
-    }
 
     updateLabels();
   } catch {}

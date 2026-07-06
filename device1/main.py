@@ -20,8 +20,9 @@ from device1.counter.tracker import CentroidTracker
 from device1.counter.line_counter import LineCounter
 from device1.storage.local_storage import LocalStorage
 from device1.lora.transmitter import LoRaTransmitter
+import threading
 from device1.setup_mode.shared_state import SharedState
-from device1.setup_mode.coordinator import SetupModeCoordinator
+from device1.setup_mode.web_app import create_app
 
 
 def _setup_logging(cfg: dict) -> None:
@@ -108,7 +109,7 @@ class Device1:
         self._storage: Optional[LocalStorage] = None
         self._lora: Optional[LoRaTransmitter] = None
         self._shared_state = SharedState()
-        self._setup_coordinator: Optional[SetupModeCoordinator] = None
+        self._setup_server = None
 
     def _init_components(self) -> None:
         cfg = self._cfg
@@ -174,8 +175,17 @@ class Device1:
 
         setup_cfg = cfg.get("setup_mode", {})
         if setup_cfg.get("enabled", True):
-            self._setup_coordinator = SetupModeCoordinator(setup_cfg, self._shared_state)
-            self._setup_coordinator.start()
+            port = setup_cfg.get("port", 8080)
+            from werkzeug.serving import make_server
+            flask_app = create_app(self._shared_state)
+            self._setup_server = make_server("0.0.0.0", port, flask_app)
+            t = threading.Thread(
+                target=self._setup_server.serve_forever,
+                name="setup-web",
+                daemon=True,
+            )
+            t.start()
+            self._logger.info("Setup web app listening on port %d", port)
 
     def _send_lora_update(self, device_id: str, count_in: int, count_out: int) -> None:
         try:
@@ -313,8 +323,8 @@ class Device1:
 
     def _shutdown(self) -> None:
         self._logger.info("Shutting down Device1")
-        if self._setup_coordinator:
-            self._setup_coordinator.stop()
+        if self._setup_server:
+            self._setup_server.shutdown()
         if self._camera:
             self._camera.stop()
         if self._detector:
