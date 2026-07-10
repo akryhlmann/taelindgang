@@ -224,6 +224,8 @@ class Device1:
         line_counter: Optional[LineCounter] = None
         frame_dims_known = False
         last_reset_date = datetime.date.today()
+        frame_count = 0
+        fps_window_start = time.time()
 
         self._logger.info("Device1 main loop started (device_id=%s)", device_id)
 
@@ -241,6 +243,7 @@ class Device1:
             if frame is None:
                 time.sleep(0.05)
                 continue
+            frame_count += 1
 
             if not frame_dims_known:
                 h, w = frame.shape[:2]
@@ -305,15 +308,19 @@ class Device1:
 
             if now - last_status_log >= status_interval:
                 total_in, total_out = line_counter.get_totals()
+                fps = frame_count / max(now - fps_window_start, 0.001)
                 self._logger.info(
-                    "Status: tracks=%d in=%d out=%d camera_ok=%s event_active=%s",
+                    "Status: tracks=%d in=%d out=%d fps=%.1f camera_ok=%s event_active=%s",
                     len(tracks),
                     total_in,
                     total_out,
+                    fps,
                     self._camera.is_connected(),
                     event_active,
                 )
                 last_status_log = now
+                frame_count = 0
+                fps_window_start = now
 
         self._shutdown()
 
